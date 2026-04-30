@@ -1,0 +1,3 @@
+[submodule "models/talkie_vendor"]
+	path = models/talkie_vendor
+	url = https://github.com/talkie-lm/talkie.git

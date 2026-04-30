@@ -1,0 +1,95 @@
+# Curated policy catalog for belief-elicitation eval.
+# Each policy is probed against every year-model in [START_YEAR, END_YEAR].
+# Hypothesis: P(implemented | year-Y model) rises as Y approaches implementation_year
+# and peaks at or shortly before the policy is enacted.
+#
+# Selection criteria:
+#   1. Implemented within START_YEAR..END_YEAR (currently 1931-1970).
+#   2. Anticipated for several years before implementation -- there is real
+#      year-by-year movement to detect, not a single surprise event.
+#   3. Distinctive enough that plausible distractors can be constructed.
+#   4. Well-covered by the corpus (NYT, Economist, FT, legal, patents).
+#
+# 'description' is a paraphrase that avoids the canonical act name, so the eval is
+# not a verbatim-recall test. 'anticipation_start_year' is a soft hint for analysis
+# windows; it is not used for scoring.
+
+policies:
+  - id: social_security_1935
+    name: Federal old-age social insurance program
+    description: >-
+      A national program in the United States providing income to retired workers,
+      funded by mandatory payroll contributions from current workers and their
+      employers, with monthly benefits scaled to lifetime earnings.
+    implementation_year: 1935
+    anticipation_start_year: 1929
+    domain: us_social_insurance
+    region: united_states
+    source: Social Security Act of 1935 (P.L. 74-271)
+    notes: >-
+      Driven by Depression-era pressure on the elderly. Frances Perkins's Committee
+      on Economic Security drafted the bill in 1934, and the Townsend movement
+      (1933) pushed old-age pensions into mainstream debate.
+
+  - id: bretton_woods_1944
+    name: Postwar fixed exchange-rate system
+    description: >-
+      An international monetary regime fixing major currencies' exchange rates
+      against a gold-convertible US dollar, accompanied by a multilateral lender of
+      last resort and a postwar reconstruction bank.
+    implementation_year: 1944
+    anticipation_start_year: 1941
+    domain: international_monetary
+    region: international
+    source: Bretton Woods Agreement (July 1944); IMF and IBRD operational from 1946
+    notes: >-
+      The White Plan (US) and Keynes Plan (UK) circulated 1942-1943 as competing
+      designs. The 44-nation conference in July 1944 produced the final agreement.
+
+  - id: marshall_plan_1948
+    name: Large-scale US economic aid for postwar Western Europe
+    description: >-
+      A multi-year United States program providing several billion dollars per
+      year of grants and loans to rebuild the economies of Western European
+      nations after the Second World War, conditional on intra-European economic
+      cooperation.
+    implementation_year: 1948
+    anticipation_start_year: 1946
+    domain: foreign_aid
+    region: united_states_western_europe
+    source: Foreign Assistance Act of 1948 / Economic Cooperation Act (P.L. 80-472)
+    notes: >-
+      Marshall's Harvard speech proposing the plan was June 5, 1947. Congressional
+      debate ran through late 1947 and early 1948 before passage in April 1948.
+
+  - id: civil_rights_1964
+    name: Federal ban on segregation and employment discrimination
+    description: >-
+      A United States federal law prohibiting discrimination on the basis of race,
+      color, religion, sex, or national origin in public accommodations, in
+      employment, and in any program receiving federal funds.
+    implementation_year: 1964
+    anticipation_start_year: 1955
+    domain: us_civil_rights
+    region: united_states
+    source: Civil Rights Act of 1964 (P.L. 88-352)
+    notes: >-
+      Built on a decade of civil-rights movement activity (Brown v. Board 1954,
+      Montgomery 1955-56, sit-ins 1960, Birmingham 1963). Kennedy proposed the
+      bill in June 1963; signed by Johnson on July 2, 1964.
+
+  - id: medicare_1965
+    name: Federal health insurance for Americans aged 65 and older
+    description: >-
+      A United States federal program providing hospital and medical insurance to
+      people aged 65 and older, funded primarily through payroll taxes and
+      administered alongside the existing federal old-age insurance system.
+    implementation_year: 1965
+    anticipation_start_year: 1945
+    domain: us_health
+    region: united_states
+    source: Social Security Amendments of 1965 (P.L. 89-97)
+    notes: >-
+      Truman first proposed national health insurance in 1945. The proposal was
+      narrowed to seniors during the 1950s under the Forand bill, debated through
+      the early 1960s, and enacted under Johnson in July 1965.
