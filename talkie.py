@@ -1,13 +1,13 @@
-"""Backend for Talkie-LM (vendored model code under models/talkie_vendor/).
+"""Talkie-LM loader and scoring (wrapper around vendored model code).
 
 Loader is memory-efficient: streams the fp32 ckpt via mmap and casts to bf16
 on the fly into a pre-allocated bf16 model. Steady peak ~28 GB instead of
 the vendored loader's ~100 GB intermediate spike (which is fine on a GPU box
 but uncomfortable on a 128 GB workstation with other apps running).
 
-Eval primitive `score_continuations` re-implements TalkieModel.forward without
-the last-token slice so we get [B, T, V] logits for scoring multi-token
-continuations. Vendored code stays unmodified.
+`score_continuations` re-implements TalkieModel.forward without the last-token
+slice so we get [B, T, V] logits for scoring multi-token continuations. The
+vendored package at models/talkie_vendor/ stays unmodified.
 """
 from __future__ import annotations
 
@@ -18,11 +18,9 @@ from typing import Sequence
 import torch
 import torch.nn.functional as F
 
-from .base import ModelBackend
-
 
 # Make the vendored package importable without requiring `pip install -e`.
-_VENDOR_SRC = Path(__file__).parent / "talkie_vendor" / "src"
+_VENDOR_SRC = Path(__file__).parent / "models" / "talkie_vendor" / "src"
 if _VENDOR_SRC.exists() and str(_VENDOR_SRC) not in sys.path:
     sys.path.insert(0, str(_VENDOR_SRC))
 
@@ -79,9 +77,9 @@ def _load_ckpt_streamed(weights_dir: Path, device: torch.device):
     return model
 
 
-class TalkieBackend(ModelBackend):
-    def __init__(self, source):
-        self.weights_dir = Path(source)
+class TalkieBackend:
+    def __init__(self, weights_dir):
+        self.weights_dir = Path(weights_dir)
         self._model = None
         self._tokenizer = None
         self._device = None
@@ -145,9 +143,3 @@ class TalkieBackend(ModelBackend):
 
             results.append(total / len(cont_ids))
         return results
-
-    def midtrain(self, corpus_path: Path, output_dir: Path) -> Path:
-        raise NotImplementedError("midtrain pending — see train/midtrain.py")
-
-    def sft(self, sft_path: Path, output_dir: Path) -> Path:
-        raise NotImplementedError("sft pending — see train/sft.py")

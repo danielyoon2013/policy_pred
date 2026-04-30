@@ -23,7 +23,8 @@ _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parent
 sys.path.insert(0, str(_REPO.parent))
 
-from policy_pred.models.factory import load_backend  # noqa: E402
+from policy_pred import config  # noqa: E402
+from policy_pred.talkie import TalkieBackend  # noqa: E402
 
 
 def _section(title: str) -> None:
@@ -43,10 +44,10 @@ def _probe(backend, prompt: str, options: list[str]) -> list[float]:
 
 
 def main() -> None:
-    print("Loading talkie_base via registry...")
+    print(f"Loading Talkie from {config.TALKIE_WEIGHTS_DIR}...")
     print("(53 GB ckpt, mmap streamed -> bf16; first run ~5-10 min on CPU)")
     t0 = time.time()
-    backend = load_backend("talkie_base")
+    backend = TalkieBackend(config.TALKIE_WEIGHTS_DIR)
     backend._ensure_loaded()  # force the load now so timing isn't mixed in
     print(f"loaded in {time.time() - t0:.1f}s")
 
