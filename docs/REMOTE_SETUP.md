@@ -43,12 +43,17 @@ pip install tiktoken huggingface-hub pyyaml pandas pyarrow numpy
 ## 4. Download Talkie weights (~5-10 min)
 
 ```bash
-huggingface-cli download talkie-lm/talkie-1930-13b-base \
-    --local-dir ~/talkie_base \
-    --local-dir-use-symlinks False
+hf download talkie-lm/talkie-1930-13b-base --local-dir ~/talkie_base
 ```
 
-Result: `~/talkie_base/{final.ckpt, vocab.txt, ...}`.
+(`huggingface-cli` was renamed to `hf` in late 2025; the old name now just
+prints a deprecation warning and exits.)
+
+Result: `~/talkie_base/{final.ckpt, vocab.txt, ...}`. Sanity check:
+```bash
+ls -la ~/talkie_base/
+# expect: final.ckpt (~53 GB) + vocab.txt (~4.6 MB)
+```
 
 ## 5. Point the code at the remote weights path
 
