@@ -1,9 +1,15 @@
 """Config for policy_pred: paths, year range, hyperparameters."""
+import os
 from pathlib import Path
 
 DATA_ROOT = Path("D:/hist_LLM/policy_pred")
 CORPUS_RAW_ROOT = Path("D:/hist_LLM/corpus/raw")
-TALKIE_WEIGHTS_DIR = DATA_ROOT / "models" / "talkie_base"
+
+# TALKIE_WEIGHTS_DIR can be overridden via env var so the same code runs on
+# the local Windows workstation (D:/...) and rented Linux GPU boxes ($HOME/...).
+TALKIE_WEIGHTS_DIR = Path(
+    os.environ.get("TALKIE_WEIGHTS_DIR") or DATA_ROOT / "models" / "talkie_base"
+)
 
 # Base model is assumed trained on data <= BASE_CUTOFF_YEAR.
 # Year-models are built cumulatively: base -> +1931 -> +1932 -> ...

@@ -33,17 +33,19 @@ Hypothesis: a model trained only on text through year Y "believes in" a policy m
 
 ```
 policy_pred/
-  config.py              paths, year range, hyperparameters
-  talkie.py              TalkieBackend: streaming bf16 loader + score_continuations
-  catalog.yaml           policies (work-in-progress)         [via policies/catalog.yaml]
-  STATE.md               current state (changes per session)
-  CLAUDE.md              durable rules (this file)
-  __init__.py            empty, makes the dir a Python package
-  models/
-    talkie_vendor/       git submodule, NEVER edit
+  config.py                    paths, year range, hyperparameters
+  talkie.py                    TalkieBackend: streaming bf16 loader + score_continuations
+  midtrain.py                  LoRA continued pretraining loop (CUDA only)
+  STATE.md                     current state (changes per session)
+  CLAUDE.md                    durable rules (this file)
+  __init__.py                  empty, makes the dir a Python package
+  policies/catalog.yaml        the policies (work-in-progress)
+  docs/                        runbooks (REMOTE_SETUP.md, etc.)
+  models/talkie_vendor/        git submodule, NEVER edit
   scripts/
-    smoke_talkie.py      validation: load + score sanity probes
-    inspect_corpus.py    corpus collection breakdowns by year
+    smoke_talkie.py            validate base loader + sanity probes
+    probe_with_adapter.py      compare base vs base+adapter on the same probes
+    inspect_corpus.py          corpus collection breakdowns by year
 ```
 
 ## Data layout (on D:)
@@ -87,22 +89,24 @@ Schema is **in flux** — see `policies/catalog.yaml` for current fields. Durabl
 
 ## Pipeline (script sequence)
 
-There is no CLI orchestrator. Run the scripts in this order:
+There is no CLI orchestrator. The scripts are run in this order:
 
 ```
-python scripts/inspect_corpus.py              # one-time, exploratory
-python -m policy_pred.slice_corpus  --year 1931
-python -m policy_pred.midtrain      --year 1931
-python -m policy_pred.probe         --year 1931
-python -m policy_pred.analyze                 # after several years
+python scripts/inspect_corpus.py              # one-time, exploratory (CPU)
+python scripts/smoke_talkie.py                # validate base loads (CPU OK)
+python midtrain.py --data <parquet>           # LoRA train one year (CUDA only)
+python scripts/probe_with_adapter.py --adapter <dir>   # compare base vs +adapter
 ```
 
-(Modules to the right of `inspect_corpus.py` are not yet written — see STATE.md.) `midtrain.py` is sequential per year (year Y starts from year (Y-1)'s checkpoint). `slice_corpus.py`, `probe.py`, and `analyze.py` are independent per year and can be parallelised. Always run from the project root with `.venv/` activated.
+For the V1 validation run (year 1931 only) see `docs/REMOTE_SETUP.md`. `midtrain.py` will eventually become sequential per year (year Y starts from year (Y-1)'s adapter); the V2 expansion adds a `slice_corpus.py` for aggregated year shards and an `analyze.py` for trajectory plots once we have multiple years. Run scripts from the project root with `.venv/` activated.
 
 ## Pointers
 
 - `talkie.py::TalkieBackend` — the loader + scoring class.
 - `talkie.py::_load_ckpt_streamed` — memory-efficient ckpt loader.
 - `talkie.py::_forward_all_positions` — `[B, T, V]` forward (replicates vendored `TalkieModel.forward` minus the last-token slice).
+- `midtrain.py` — LoRA continued-pretraining loop; refuses to run on CPU.
 - `scripts/smoke_talkie.py` — reference implementation of how to use TalkieBackend end-to-end.
+- `scripts/probe_with_adapter.py` — base vs base+adapter probe comparison.
+- `docs/REMOTE_SETUP.md` — runbook for renting an A100 and running V1 end-to-end.
 - `STATE.md` — current state; update it when you finish a session.
