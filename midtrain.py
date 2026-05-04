@@ -5,8 +5,13 @@ build aggregated year shards via a future slice_corpus.py. The CLI accepts
 either --data <parquet-path> directly or --year <Y> to use the path helper
 in config.py.
 
+Cumulative chaining: pass --init-from <prior-adapter-dir> to load the
+previous year's LoRA weights as the trainable starting point. Year-Y model
+then = M_base + (continued-trained M_(Y-1) adapter). Without --init-from,
+training starts from a fresh adapter on top of M_base.
+
 Run on an A100 80GB. Refuses to run on CPU because a single year would take
-months. See REMOTE_SETUP.md for the full remote workflow.
+months. See docs/REMOTE_SETUP.md for the full remote workflow.
 
 Output: a PEFT LoRA adapter directory at --out (default depends on --year).
 The frozen base is NOT saved; you reload it from TALKIE_WEIGHTS_DIR and
@@ -53,9 +58,15 @@ def parse_args() -> argparse.Namespace:
                         "text_cleaned/combined_text/cleaned_article/text/article.")
     p.add_argument("--year", type=int,
                    help="Use config.year_corpus_path(Y) instead of --data.")
-    p.add_argument("--rank", type=int, default=32, help="LoRA rank (default 32).")
+    p.add_argument("--rank", type=int, default=32,
+                   help="LoRA rank for a fresh adapter (default 32). "
+                        "Ignored when --init-from is given (rank inherited from prior).")
     p.add_argument("--lora-alpha", type=int, default=None,
-                   help="LoRA alpha (default 2*rank).")
+                   help="LoRA alpha for a fresh adapter (default 2*rank). "
+                        "Ignored when --init-from is given.")
+    p.add_argument("--init-from", type=Path, default=None,
+                   help="Prior adapter dir to continue training from (cumulative "
+                        "chain). E.g. years/1931/checkpoint to seed year-1932 training.")
     p.add_argument("--epochs", type=int, default=1)
     p.add_argument("--out", type=Path,
                    help="Output dir for adapter. Default: years/{Y}/checkpoint "
@@ -179,17 +190,31 @@ def main() -> None:
     packed = pack_tokens(token_lists, eos_id, args.seq_len)
     print(f"  packed: {len(packed):,} sequences of {args.seq_len}")
 
-    # 3. Apply LoRA.
-    print(f"Applying LoRA (r={args.rank}, alpha={args.lora_alpha or 2*args.rank})...")
-    from peft import LoraConfig, get_peft_model
-    lora_cfg = LoraConfig(
-        r=args.rank,
-        lora_alpha=args.lora_alpha or 2 * args.rank,
-        target_modules=TARGET_MODULES,
-        lora_dropout=0.0,
-        bias="none",
-    )
-    peft_model = get_peft_model(model, lora_cfg)
+    # 3. Apply LoRA — either fresh on M_base, or continue from a prior adapter.
+    if args.init_from is not None:
+        if not args.init_from.exists():
+            sys.exit(f"--init-from path not found: {args.init_from}")
+        print(f"Loading prior adapter from {args.init_from} (cumulative chain)")
+        print(f"  (rank/alpha inherited from prior adapter_config.json; "
+              f"--rank/--lora-alpha CLI flags ignored.)")
+        from peft import PeftModel
+        # is_trainable=True keeps the LoRA layers tunable for continued training.
+        # Without it, PeftModel.from_pretrained loads adapters as inference-only.
+        peft_model = PeftModel.from_pretrained(
+            model, str(args.init_from), is_trainable=True
+        )
+    else:
+        print(f"Applying fresh LoRA (r={args.rank}, alpha={args.lora_alpha or 2*args.rank})...")
+        from peft import LoraConfig, get_peft_model
+        lora_cfg = LoraConfig(
+            r=args.rank,
+            lora_alpha=args.lora_alpha or 2 * args.rank,
+            target_modules=TARGET_MODULES,
+            lora_dropout=0.0,
+            bias="none",
+        )
+        peft_model = get_peft_model(model, lora_cfg)
+
     peft_model.print_trainable_parameters()
     peft_model.train()
 
