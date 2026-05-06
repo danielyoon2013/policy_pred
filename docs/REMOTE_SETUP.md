@@ -99,7 +99,7 @@ issues first.
 ## 8. Run midtrain (~1-2 hours)
 
 ```bash
-python midtrain.py \
+python train.py \
     --data data/nyt_1931.parquet \
     --rank 32 \
     --out checkpoints/year_1931
@@ -119,7 +119,7 @@ The output adapter at `checkpoints/year_1931/` is ~120 MB and contains
 If you want to verify the loop runs end-to-end before committing to the
 full ~1-2 hour run, do a 50-step smoke training:
 ```bash
-python midtrain.py \
+python train.py \
     --data data/nyt_1931.parquet \
     --rank 32 \
     --max-steps 50 \

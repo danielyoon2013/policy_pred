@@ -10,13 +10,13 @@ without changing the on-disk schema (`probes` is a list).
 
 Usage:
     # Year 1931 with the year's adapter (default):
-    python evaluate.py --year 1931
+    python eval.py --year 1931
 
     # Year 1931, base only (no adapter):
-    python evaluate.py --year 1931 --no-adapter
+    python eval.py --year 1931 --no-adapter
 
     # Year 1931, adapter from a non-default location:
-    python evaluate.py --year 1931 --adapter checkpoints/test_run
+    python eval.py --year 1931 --adapter checkpoints/test_run
 
 CPU is fine; this is just inference. For quick comparison-style runs against
 a single adapter, scripts/probe_with_adapter.py is faster (no per-policy I/O).

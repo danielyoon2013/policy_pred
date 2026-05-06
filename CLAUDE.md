@@ -35,7 +35,7 @@ Hypothesis: a model trained only on text through year Y "believes in" a policy m
 policy_pred/
   config.py                    paths, year range, hyperparameters
   talkie.py                    TalkieBackend: streaming bf16 loader + score_continuations
-  midtrain.py                  LoRA continued pretraining loop (CUDA only)
+  train.py                     LoRA / FT training loop (CUDA only)
   STATE.md                     current state (changes per session)
   CLAUDE.md                    durable rules (this file)
   __init__.py                  empty, makes the dir a Python package
@@ -57,7 +57,7 @@ D:/hist_LLM/policy_pred/
   models/talkie_base/{final.ckpt, vocab.txt}    # 53 GB + 4.6 MB
   years/{Y}/
     raw.parquet                                 # written by slice_corpus.py
-    checkpoint/                                 # written by midtrain.py (LoRA adapter)
+    checkpoint/                                 # written by train.py (LoRA adapter)
   eval/{policy_id}/{Y}.json                     # written by probe.py
 ```
 
@@ -94,18 +94,18 @@ There is no CLI orchestrator. The scripts are run in this order:
 ```
 python scripts/inspect_corpus.py              # one-time, exploratory (CPU)
 python scripts/smoke_talkie.py                # validate base loads (CPU OK)
-python midtrain.py --data <parquet>           # LoRA train one year (CUDA only)
+python train.py --data <parquet>              # LoRA train one year (CUDA only)
 python scripts/probe_with_adapter.py --adapter <dir>   # compare base vs +adapter
 ```
 
-For the V1 validation run (year 1931 only) see `docs/REMOTE_SETUP.md`. `midtrain.py` will eventually become sequential per year (year Y starts from year (Y-1)'s adapter); the V2 expansion adds a `slice_corpus.py` for aggregated year shards and an `analyze.py` for trajectory plots once we have multiple years. Run scripts from the project root with `.venv/` activated.
+For the V1 validation run (year 1931 only) see `docs/REMOTE_SETUP.md`. `train.py` is sequential per year (year Y starts from year (Y-1)'s adapter via `--init-from`); the V2 expansion adds a `corpus.py + synth.py` flow for domain-pluggable experiment configs and an `analyze.py` for trajectory plots once we have multiple years. Run scripts from the project root with `.venv/` activated.
 
 ## Pointers
 
 - `talkie.py::TalkieBackend` — the loader + scoring class.
 - `talkie.py::_load_ckpt_streamed` — memory-efficient ckpt loader.
 - `talkie.py::_forward_all_positions` — `[B, T, V]` forward (replicates vendored `TalkieModel.forward` minus the last-token slice).
-- `midtrain.py` — LoRA continued-pretraining loop; refuses to run on CPU.
+- `train.py` — LoRA / FT training loop; refuses to run on CPU.
 - `scripts/smoke_talkie.py` — reference implementation of how to use TalkieBackend end-to-end.
 - `scripts/probe_with_adapter.py` — base vs base+adapter probe comparison.
 - `docs/REMOTE_SETUP.md` — runbook for renting an A100 and running V1 end-to-end.

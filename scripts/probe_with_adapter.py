@@ -1,6 +1,6 @@
 """Probe base Talkie and (optionally) base + LoRA adapter; show side-by-side.
 
-Used after midtrain.py to validate that the trained LoRA adapter actually
+Used after train.py to validate that the trained LoRA adapter actually
 shifts the model's output distribution. Runs three probes:
   - Two sanity probes (Paris/London) — should still pass after training.
   - The Social Security 1930 probe — should shift if the adapter learned
