@@ -143,3 +143,40 @@ class TalkieBackend:
 
             results.append(total / len(cont_ids))
         return results
+
+    @torch.no_grad()
+    def generate(
+        self,
+        prompt: str,
+        max_new_tokens: int = 256,
+        stop_sequences: Sequence[str] = (),
+    ) -> str:
+        """Greedy decoding. Slow (no KV cache) — fine for eval, not for serving.
+
+        Returns the generated continuation (NOT including the prompt). Stops
+        on EOS, on max_new_tokens, or when any stop_sequences string appears
+        in the decoded output.
+        """
+        self._ensure_loaded()
+        tok = self._tokenizer
+        eos_id = tok.encode("<|endoftext|>", allowed_special="all")[0]
+        prompt_ids = tok.encode(prompt, allowed_special="all")
+        x = torch.tensor([prompt_ids], dtype=torch.long, device=self._device)
+
+        new_ids: list[int] = []
+        for _ in range(max_new_tokens):
+            logits = self._forward_all_positions(x)  # [1, T, V]
+            next_id = int(logits[0, -1, :].argmax().item())
+            if next_id == eos_id:
+                break
+            new_ids.append(next_id)
+            x = torch.cat(
+                [x, torch.tensor([[next_id]], dtype=torch.long, device=self._device)],
+                dim=1,
+            )
+            if stop_sequences:
+                # Decode only the newly-generated portion to check for stops.
+                decoded = tok.decode(new_ids)
+                if any(s in decoded for s in stop_sequences):
+                    break
+        return tok.decode(new_ids)

@@ -1,0 +1,45 @@
+# Math methodology study — LoRA r=128 (4x default rank).
+# Identical to math_lora_r32 except for the LoRA rank — tests whether
+# higher capacity meaningfully improves GSM8K pass@1.
+#
+# corpus and synth blocks match math_lora_r32 EXACTLY so we can reuse the
+# same corpus.parquet and synth.jsonl across the three runs (synth.py
+# checks for existing output and skips). Don't drift these without intent.
+name: math_lora_r128
+
+corpus:
+  collections:
+    - source: bulk_corpus
+      filter:
+        collection: ["Open-Science-Pile", "OpenAlex", "USPTO"]
+        language: ["English"]
+        min_word_count: 200
+        max_word_count: 4000
+  n_seeds: 5000
+  seed: 42
+
+synth:
+  generators:
+    math_word:
+      n_per_seed: 3
+      model: gpt-4o-mini
+      temperature: 0.7
+      max_tokens: 1024
+      use_batch_api: false
+      max_workers: 8
+      max_doc_chars: 3000
+
+train:
+  method: lora
+  rank: 128
+  lora_alpha: 256
+  epochs: 1
+  lr: 1.0e-4
+  batch_size: 8
+  seq_len: 2048
+
+eval:
+  evaluator: gsm8k
+  test_set: "gsm8k:main:test"
+  n_samples: null
+  max_new_tokens: 256

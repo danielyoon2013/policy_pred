@@ -1,0 +1,47 @@
+# Math methodology study — full fine-tuning (all 13B params trainable).
+# Identical to math_lora_r32 in corpus + synth so the same generated data
+# is reused across all three runs. Differs only in train.method.
+#
+# REQUIRES MULTI-GPU FSDP. Single A100 80GB cannot fit full FT of 13B.
+# Launch with:
+#   accelerate launch --config_file accelerate_fsdp.yaml train.py \
+#       --experiment experiments/math_full_ft.yaml
+#
+# (accelerate_fsdp.yaml + the FSDP wrap is a separate plumbing task; this
+# YAML is the spec.)
+name: math_full_ft
+
+corpus:
+  collections:
+    - source: bulk_corpus
+      filter:
+        collection: ["Open-Science-Pile", "OpenAlex", "USPTO"]
+        language: ["English"]
+        min_word_count: 200
+        max_word_count: 4000
+  n_seeds: 5000
+  seed: 42
+
+synth:
+  generators:
+    math_word:
+      n_per_seed: 3
+      model: gpt-4o-mini
+      temperature: 0.7
+      max_tokens: 1024
+      use_batch_api: false
+      max_workers: 8
+      max_doc_chars: 3000
+
+train:
+  method: full_ft
+  epochs: 1
+  lr: 2.0e-5                    # lower LR for full FT (Ricardo's value)
+  batch_size: 4                 # smaller batch; FSDP will distribute
+  seq_len: 2048
+
+eval:
+  evaluator: gsm8k
+  test_set: "gsm8k:main:test"
+  n_samples: null
+  max_new_tokens: 256

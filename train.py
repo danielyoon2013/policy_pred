@@ -78,19 +78,70 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lr", type=float, default=LEARNING_RATE)
     p.add_argument("--no-grad-ckpt", action="store_true",
                    help="Disable gradient checkpointing (faster but more memory).")
+    p.add_argument("--full-ft", action="store_true",
+                   help="Full fine-tuning instead of LoRA. Requires multi-GPU "
+                        "FSDP (13B doesn't fit one A100 80GB at full FT).")
+    p.add_argument("--experiment", type=Path, default=None,
+                   help="Resolve --data and --out from an experiment YAML "
+                        "(reads experiments/<name>/synth.jsonl or corpus.parquet).")
     return p.parse_args()
 
 
-def load_text_column(parquet_path: Path) -> list[str]:
+def render_chat_record(record: dict) -> str:
+    """Render a {messages: [...]} chat record as a single training string.
+
+    Plain User:/Assistant: format, no special tokens. The base model trains
+    on the whole rendered string with standard next-token loss; we don't
+    mask the prompt portion in V1 because Talkie isn't an instruction-tuned
+    model and we're effectively doing instruction-flavored continued
+    pretraining, not "real" SFT.
+    """
+    parts: list[str] = []
+    for msg in record["messages"]:
+        role = msg["role"]
+        content = msg["content"].strip()
+        if role == "system":
+            parts.append(f"System: {content}")
+        elif role == "user":
+            parts.append(f"User: {content}")
+        elif role == "assistant":
+            parts.append(f"Assistant: {content}")
+    return "\n\n".join(parts)
+
+
+def load_documents(data_path: Path) -> list[str]:
+    """Load training documents. Auto-detects format by extension.
+
+    .parquet: text column (raw text, V1 policy CPT shape)
+    .jsonl:   chat records {"messages": [...]} (V2 SFT shape)
+    """
+    suffix = data_path.suffix.lower()
+    if suffix == ".jsonl":
+        import json
+        docs: list[str] = []
+        with open(data_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                rec = json.loads(line)
+                if "messages" in rec:
+                    docs.append(render_chat_record(rec))
+                elif "text" in rec:
+                    docs.append(rec["text"])
+        print(f"  jsonl: {len(docs):,} chat records rendered")
+        return docs
+
+    # parquet path
     import pandas as pd
-    df = pd.read_parquet(parquet_path)
+    df = pd.read_parquet(data_path)
     for col in ("text_cleaned", "combined_text", "cleaned_article", "text", "article"):
         if col in df.columns:
-            print(f"  using column '{col}'")
-            docs = [t for t in df[col].dropna().tolist() if isinstance(t, str) and t.strip()]
-            return docs
+            print(f"  parquet: using column '{col}'")
+            return [t for t in df[col].dropna().tolist()
+                    if isinstance(t, str) and t.strip()]
     raise KeyError(
-        f"no text column found in {parquet_path}; "
+        f"no text column found in {data_path}; "
         f"expected one of: text_cleaned, combined_text, cleaned_article, text, article"
     )
 
@@ -144,19 +195,36 @@ def lr_at_step(step: int, total: int, warmup: int, peak: float) -> float:
 def main() -> None:
     args = parse_args()
 
-    # Resolve data path.
+    # Resolve data path. Priority: --data > --experiment > --year.
     if args.data is not None:
         data_path = args.data
+    elif args.experiment is not None:
+        from policy_pred.corpus import experiment_dir, load_experiment
+        cfg = load_experiment(args.experiment)
+        exp_dir = experiment_dir(cfg["name"])
+        # Prefer synth.jsonl (S) if it exists; else fall back to corpus.parquet (W).
+        synth_path = exp_dir / "synth.jsonl"
+        corpus_path = exp_dir / "corpus.parquet"
+        if synth_path.exists():
+            data_path = synth_path
+        elif corpus_path.exists():
+            data_path = corpus_path
+        else:
+            sys.exit(f"experiment {cfg['name']} has neither synth.jsonl nor "
+                     f"corpus.parquet; run synth.py / corpus.py first.")
     elif args.year is not None:
         data_path = config.year_corpus_path(args.year)
     else:
-        sys.exit("must pass --data <parquet> or --year <Y>")
+        sys.exit("must pass --data, --experiment, or --year")
     if not data_path.exists():
         sys.exit(f"data not found: {data_path}")
 
     # Resolve output dir.
     if args.out is not None:
         out_dir = args.out
+    elif args.experiment is not None:
+        from policy_pred.corpus import experiment_dir, load_experiment
+        out_dir = experiment_dir(load_experiment(args.experiment)["name"]) / "checkpoint"
     elif args.year is not None:
         out_dir = config.year_checkpoint_dir(args.year)
     else:
@@ -178,7 +246,7 @@ def main() -> None:
 
     # 2. Read + tokenize training text.
     print(f"Reading {data_path}...")
-    docs = load_text_column(data_path)
+    docs = load_documents(data_path)
     print(f"  {len(docs):,} documents")
 
     print("Tokenizing...")
@@ -190,8 +258,21 @@ def main() -> None:
     packed = pack_tokens(token_lists, eos_id, args.seq_len)
     print(f"  packed: {len(packed):,} sequences of {args.seq_len}")
 
-    # 3. Apply LoRA — either fresh on M_base, or continue from a prior adapter.
-    if args.init_from is not None:
+    # 3. Apply LoRA, or full FT, depending on --full-ft.
+    if args.full_ft:
+        if args.init_from is not None:
+            sys.exit("--init-from is incompatible with --full-ft; full FT does not "
+                     "use a separate adapter to continue from.")
+        print("Full fine-tuning: all base weights are trainable.")
+        print("WARNING: 13B full FT does NOT fit one A100 80GB. You must launch "
+              "this with FSDP across multiple GPUs (accelerate launch ...). "
+              "Single-GPU runs will OOM.")
+        for p in model.parameters():
+            p.requires_grad = True
+        peft_model = model  # alias; below code uses peft_model, but it's just `model`
+        n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"  trainable params: {n_trainable:,} ({n_trainable/1e9:.2f}B)")
+    elif args.init_from is not None:
         if not args.init_from.exists():
             sys.exit(f"--init-from path not found: {args.init_from}")
         print(f"Loading prior adapter from {args.init_from} (cumulative chain)")
@@ -203,6 +284,7 @@ def main() -> None:
         peft_model = PeftModel.from_pretrained(
             model, str(args.init_from), is_trainable=True
         )
+        peft_model.print_trainable_parameters()
     else:
         print(f"Applying fresh LoRA (r={args.rank}, alpha={args.lora_alpha or 2*args.rank})...")
         from peft import LoraConfig, get_peft_model
@@ -214,8 +296,8 @@ def main() -> None:
             bias="none",
         )
         peft_model = get_peft_model(model, lora_cfg)
+        peft_model.print_trainable_parameters()
 
-    peft_model.print_trainable_parameters()
     peft_model.train()
 
     # 4. Optimizer + LR schedule.
@@ -277,9 +359,13 @@ def main() -> None:
                 )
             step += 1
 
-    # 6. Save adapter.
-    print(f"\nSaving adapter to {out_dir}...")
-    peft_model.save_pretrained(out_dir)
+    # 6. Save.
+    if args.full_ft:
+        print(f"\nSaving full state_dict to {out_dir}/model_state.pt ...")
+        torch.save(peft_model.state_dict(), out_dir / "model_state.pt")
+    else:
+        print(f"\nSaving adapter to {out_dir}...")
+        peft_model.save_pretrained(out_dir)
     print(f"  contents: {sorted(p.name for p in out_dir.iterdir())}")
     print("Done.")
 
