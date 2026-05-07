@@ -202,16 +202,23 @@ def main() -> None:
         from policy_pred.corpus import experiment_dir, load_experiment
         cfg = load_experiment(args.experiment)
         exp_dir = experiment_dir(cfg["name"])
-        # Prefer synth.jsonl (S) if it exists; else fall back to corpus.parquet (W).
+        # Resolution order:
+        #   1. cfg.train.data (explicit external path; bypasses corpus/synth stages)
+        #   2. exp_dir/synth.jsonl  (output of synth.py)
+        #   3. exp_dir/corpus.parquet  (output of corpus.py if synth was skipped)
+        train_data = cfg.get("train", {}).get("data")
         synth_path = exp_dir / "synth.jsonl"
         corpus_path = exp_dir / "corpus.parquet"
-        if synth_path.exists():
+        if train_data is not None:
+            data_path = Path(train_data)
+        elif synth_path.exists():
             data_path = synth_path
         elif corpus_path.exists():
             data_path = corpus_path
         else:
-            sys.exit(f"experiment {cfg['name']} has neither synth.jsonl nor "
-                     f"corpus.parquet; run synth.py / corpus.py first.")
+            sys.exit(f"experiment {cfg['name']} has neither train.data, "
+                     f"synth.jsonl, nor corpus.parquet. Either set "
+                     f"train.data in the YAML or run synth.py / corpus.py first.")
     elif args.year is not None:
         data_path = config.year_corpus_path(args.year)
     else:

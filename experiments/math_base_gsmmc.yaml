@@ -1,0 +1,17 @@
+# Eval-only YAML: run GSM-MC against Talkie base (no adapter).
+# This is the baseline number that LoRA-trained variants need to beat.
+#
+# Usage (local CPU smoke):
+#   python eval.py --experiment experiments/math_base_gsmmc.yaml --no-adapter
+#
+# With n_samples=10 the run takes ~30-60 min on CPU. For the full ~1300
+# problems run on the remote A100.
+name: math_base_gsmmc
+
+# No corpus / synth / train blocks — this is eval-only.
+# The dispatcher in eval.py handles missing fields gracefully via --no-adapter.
+
+eval:
+  evaluator: gsm_mc
+  test_set: D:/hist_LLM/eval_data/gsm_mc.jsonl
+  n_samples: 10        # tiny smoke run; bump or null for full eval

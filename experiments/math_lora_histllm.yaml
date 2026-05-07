@@ -1,0 +1,34 @@
+# Train Talkie+LoRA on hist_LLM's pre-existing math synth, eval on GSM-MC.
+# C1 of the V2 plan: validate that LoRA on Talkie can match nanochat-1900-1949
+# on GSM-MC reasoning.
+#
+# train.data points at hist_LLM's chat-format JSONL. Synth stage is skipped
+# (no need to regenerate; we reuse hist_LLM's already-generated corpus).
+#
+# Usage on remote A100 (after scp-ing the data file):
+#   1. scp <local-D>/.../gen_d_quantitative_cot.jsonl  user@remote:/data/
+#   2. Edit train.data below to /data/gen_d_quantitative_cot.jsonl
+#      (or override at runtime with --data /path)
+#   3. python train.py --experiment experiments/math_lora_histllm.yaml
+#   4. python eval.py  --experiment experiments/math_lora_histllm.yaml
+name: math_lora_histllm
+
+# No corpus / synth blocks — train.data points at the pre-existing JSONL.
+
+train:
+  # Local path. SCP this file to the remote box and update the path before
+  # launching training there. Or override at runtime with `--data <path>`.
+  data: D:/hist_LLM/periods/1900_1949/posttraining_data/synthetic/by_generator/gen_d_quantitative_cot.jsonl
+
+  method: lora
+  rank: 32
+  lora_alpha: 64
+  epochs: 1
+  lr: 1.0e-4
+  batch_size: 8
+  seq_len: 2048
+
+eval:
+  evaluator: gsm_mc
+  test_set: D:/hist_LLM/eval_data/gsm_mc.jsonl    # update for remote box
+  n_samples: null                                  # full ~1319-problem eval

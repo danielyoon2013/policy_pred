@@ -21,7 +21,8 @@ from importlib import import_module
 
 # Public name (used in experiment YAMLs) -> module name (file in this dir).
 REGISTRY = {
-    "gsm8k": "gsm8k",
+    "gsm_mc": "gsm_mc",          # multi-choice math (fast, 4 score_continuations per problem)
+    "gsm8k": "gsm8k",            # open-ended math (generate + parse final number; slow)
     "policy_probe": "policy_probe",
     # Future drop-ins:
     # "humaneval": "humaneval",         # cheap general-cap sanity
