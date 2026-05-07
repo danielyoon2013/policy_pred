@@ -1,0 +1,26 @@
+# synth_2step default config.
+# Two-stage pipeline: per seed, (1) generate N doc-idea concepts, then
+# (2) write one full document per idea. ~1 + N API calls per seed.
+#
+# Override any field via CLI flags.
+
+seeds: examples/seeds.txt
+out: ./out
+
+model: gpt-4o-mini
+temperature: 0.8       # slightly higher than synth_naive — diversity is the point
+max_tokens_ideas: 1024 # stage 1 (idea generation) budget
+max_tokens_writer: 1500  # stage 2 (doc writing) budget per doc
+
+# Per-seed knobs.
+n_ideas: 8             # how many doc ideas to generate per seed (= docs per seed)
+max_seed_chars: 4000
+
+# Concurrency (stage 2 has N× more calls than stage 1; pool is shared).
+max_workers: 8
+
+# Optional cap (for smoke runs). null = use all seeds.
+limit: null
+
+# Optional leakage filter (one term per line, case-insensitive substring match).
+banned_terms: null

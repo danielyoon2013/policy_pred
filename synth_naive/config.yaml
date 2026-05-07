@@ -1,0 +1,38 @@
+# synth_naive default config.
+# Override any field via CLI flags (--seeds, --out, --model, --n-per-seed, ...).
+#
+# Paths can be absolute or relative to this folder (the synth_naive/ root).
+
+# Where to read seed documents from. Supported formats (auto-detected by extension):
+#   .txt           one or more docs, separated by "\n---\n" (or one doc per line)
+#   .jsonl         one JSON record per line, must have a "text" field
+#   .parquet       must have a "text" column
+#   directory      every *.txt file is read as one seed
+seeds: examples/seeds.txt
+
+# Where outputs land. Created if missing. Will write:
+#   <out>/synth.jsonl     one {"text": "..."} record per generated document
+#   <out>/log/run.log     stdout snapshot
+#   <out>/log/config.yaml frozen copy of the effective config
+#   <out>/log/failures.jsonl  per-seed errors for retry/audit
+out: ./out
+
+# OpenAI model.
+model: gpt-4o-mini
+temperature: 0.7
+max_tokens: 1024
+
+# Per-seed knobs.
+n_per_seed: 3              # number of synthetic documents to generate per seed
+max_seed_chars: 4000       # truncate seed to this many characters before sending
+
+# Concurrency for the API calls.
+max_workers: 8
+
+# Optional cap (for smoke runs). null = use all seeds.
+limit: null
+
+# Optional leakage-prevention list. If set, abort writing any record whose text
+# contains any line from this file (case-insensitive substring match).
+# null disables the filter.
+banned_terms: null
