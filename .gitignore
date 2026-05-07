@@ -40,3 +40,4 @@ synth_2step/out/
 .ipynb_checkpoints/
 
 # Local data lives outside the repo tree (under D:\hist_LLM\...) so no rule needed.
+synth_*.zip
