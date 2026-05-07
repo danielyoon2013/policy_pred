@@ -2,7 +2,10 @@
 import os
 from pathlib import Path
 
-DATA_ROOT = Path("D:/hist_LLM/policy_pred")
+# DATA_ROOT can be overridden via env var so the same code runs on the local
+# Windows workstation (D:/...) and rented Linux GPU boxes (~/policy_pred_data).
+DATA_ROOT = Path(os.environ.get("POLICY_PRED_DATA_ROOT")
+                 or "D:/hist_LLM/policy_pred")
 CORPUS_RAW_ROOT = Path("D:/hist_LLM/corpus/raw")
 
 # TALKIE_WEIGHTS_DIR can be overridden via env var so the same code runs on
