@@ -1,0 +1,10 @@
+# Eval-only baseline: Talkie 1930 base (no adapter) on ARC-Challenge.
+# Reference point against nanochat-1900-1949's 38% on the same benchmark.
+#
+# Run on remote (after scp'ing arc_challenge_test.jsonl):
+#   python eval.py --experiment experiments/arc_base.yaml --no-adapter
+name: arc_base
+
+eval:
+  evaluator: arc_mc
+  test_set: D:/hist_LLM/eval_data/arc_challenge_test.jsonl

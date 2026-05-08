@@ -23,6 +23,7 @@ from importlib import import_module
 REGISTRY = {
     "gsm_mc": "gsm_mc",                  # multi-choice math (fast, 4 score_continuations per problem)
     "gsm8k": "gsm8k",                    # open-ended math (generate + parse final number; slow)
+    "arc_mc": "arc_mc",                  # multi-choice science reasoning (1144 items, ARC-Challenge)
     "policy_probe": "policy_probe",      # V1 yes/no probe (catalog.yaml only)
     "policy_battery": "policy_battery",  # yes_no + likert5, catalog OR csv (211 events), no year in prompt
     # Future drop-ins:
