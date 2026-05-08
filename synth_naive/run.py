@@ -286,13 +286,13 @@ def main() -> None:
             return it
 
     def _write_line(f, line: str) -> None:
-        # Windows occasionally raises OSError 22 (Invalid argument) on long
-        # streaming writes to files even on local disks. Retry with a flush
-        # so we don't lose hours of generation to a transient hiccup.
+        # No explicit flush: at 32+ workers Windows raises OSError 22 on
+        # rapid back-to-back flushes. Block-buffered text mode handles the
+        # write rate fine, and the `with open` context manager flushes on
+        # exit. Retry just the write itself for transient hiccups.
         for attempt in range(3):
             try:
                 f.write(line)
-                f.flush()
                 return
             except OSError:
                 if attempt == 2:
