@@ -1,10 +1,9 @@
-# Train Talkie+LoRA on hist_LLM's factual_mc4 + factual_cot + b_cot_cot mix,
+# Train Talkie+LoRA on hist_LLM's factual_mc4 + factual_cot mix (~138k records),
 # eval on ARC-Challenge. After base ARC eval (arc_base.yaml) gives us a
 # baseline, this YAML drives the retrain experiment.
 #
 # Usage on remote A100 (after scp-ing the combined data file):
-#   1. Locally: cat gen_a_factual_mc4.jsonl gen_a_factual_cot.jsonl gen_b_cot_cot.jsonl \
-#               > arc_train_mix.jsonl
+#   1. Locally: cat gen_a_factual_mc4.jsonl gen_a_factual_cot.jsonl > arc_train_mix.jsonl
 #   2. scp arc_train_mix.jsonl + arc_challenge_test.jsonl to remote
 #   3. accelerate launch --num_processes=4 --mixed_precision=no \
 #          train.py --experiment experiments/arc_lora_histllm.yaml \
