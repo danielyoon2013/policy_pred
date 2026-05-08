@@ -1,17 +1,28 @@
 """LoRA midtraining (continued pretraining) of Talkie-LM on a year of text.
 
-V1: trains on a single parquet file (e.g. NYT for one year). For V2, we'll
-build aggregated year shards via a future slice_corpus.py. The CLI accepts
-either --data <parquet-path> directly or --year <Y> to use the path helper
-in config.py.
+Single-GPU: `python train.py --experiment <yaml> --data <path>`
+Multi-GPU:  `accelerate launch --num_processes=N train.py --experiment ... --data ...`
+
+The script uses HuggingFace `accelerate` to wrap the model, optimizer, and
+dataloader. With one process accelerate is essentially transparent (same
+behavior as the original single-GPU loop). With N processes, accelerate
+sets up DDP: each rank loads its own copy of Talkie on its own GPU, the
+DataLoader is sharded by DistributedSampler, and gradients all-reduce
+after backward. Total wall clock scales ~linearly with N for LoRA (the
+small adapter gradients all-reduce cheaply).
+
+Effective batch in multi-GPU mode is (per-rank batch_size) * N. To keep
+the same effective batch as a 1-GPU run, divide --batch-size by N. (Or
+just keep --batch-size and accept the larger effective batch; for LoRA
+fine-tuning the LR is forgiving.)
 
 Cumulative chaining: pass --init-from <prior-adapter-dir> to load the
 previous year's LoRA weights as the trainable starting point. Year-Y model
 then = M_base + (continued-trained M_(Y-1) adapter). Without --init-from,
 training starts from a fresh adapter on top of M_base.
 
-Run on an A100 80GB. Refuses to run on CPU because a single year would take
-months. See docs/REMOTE_SETUP.md for the full remote workflow.
+Run on an A100 80GB or larger. Refuses to run on CPU because a single year
+would take months. See docs/REMOTE_SETUP.md for the full remote workflow.
 
 Output: a PEFT LoRA adapter directory at --out (default depends on --year).
 The frozen base is NOT saved; you reload it from TALKIE_WEIGHTS_DIR and
@@ -238,8 +249,25 @@ def main() -> None:
         out_dir = Path("checkpoints") / data_path.stem
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Load Talkie base.
-    print(f"Loading Talkie from {config.TALKIE_WEIGHTS_DIR}...")
+    # 0. Initialize Accelerator (transparent for 1 GPU, handles DDP for N GPUs).
+    from accelerate import Accelerator
+    accelerator = Accelerator()
+    is_main = accelerator.is_main_process
+    n_proc = accelerator.num_processes
+
+    def mp(*a, **kw):
+        """Print only on the main process."""
+        if is_main:
+            print(*a, **kw)
+
+    if n_proc > 1:
+        mp(f"Multi-GPU run: {n_proc} ranks (DDP). "
+           f"Per-rank batch={args.batch_size}, "
+           f"effective batch={args.batch_size * n_proc}.")
+
+    # 1. Load Talkie base. Each rank loads its own copy on its own GPU
+    # (CUDA_VISIBLE_DEVICES is set per rank by `accelerate launch`).
+    mp(f"Loading Talkie from {config.TALKIE_WEIGHTS_DIR}...")
     backend = TalkieBackend(config.TALKIE_WEIGHTS_DIR)
     backend._ensure_loaded()
     model = backend._model
@@ -251,49 +279,49 @@ def main() -> None:
             f"This script will not run on CPU; rent an A100 80GB."
         )
 
-    # 2. Read + tokenize training text.
-    print(f"Reading {data_path}...")
+    # 2. Read + tokenize training text. Done on every rank (cheap relative
+    # to training). DataLoader will shard via DistributedSampler.
+    mp(f"Reading {data_path}...")
     docs = load_documents(data_path)
-    print(f"  {len(docs):,} documents")
+    mp(f"  {len(docs):,} documents")
 
-    print("Tokenizing...")
+    mp("Tokenizing...")
     eos_id = tokenizer.encode("<|endoftext|>", allowed_special="all")[0]
     token_lists = [tokenizer.encode(d, allowed_special="all") for d in docs]
     n_tokens = sum(len(t) for t in token_lists)
-    print(f"  {n_tokens:,} tokens total")
+    mp(f"  {n_tokens:,} tokens total")
 
     packed = pack_tokens(token_lists, eos_id, args.seq_len)
-    print(f"  packed: {len(packed):,} sequences of {args.seq_len}")
+    mp(f"  packed: {len(packed):,} sequences of {args.seq_len}")
 
     # 3. Apply LoRA, or full FT, depending on --full-ft.
     if args.full_ft:
         if args.init_from is not None:
             sys.exit("--init-from is incompatible with --full-ft; full FT does not "
                      "use a separate adapter to continue from.")
-        print("Full fine-tuning: all base weights are trainable.")
-        print("WARNING: 13B full FT does NOT fit one A100 80GB. You must launch "
-              "this with FSDP across multiple GPUs (accelerate launch ...). "
-              "Single-GPU runs will OOM.")
+        mp("Full fine-tuning: all base weights are trainable.")
+        mp("NOTE: 13B full FT requires FSDP, not just DDP. This branch is "
+           "lightly tested; for production full-FT runs use a dedicated FSDP "
+           "config (e.g. via `accelerate config`).")
         for p in model.parameters():
             p.requires_grad = True
-        peft_model = model  # alias; below code uses peft_model, but it's just `model`
+        peft_model = model
         n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        print(f"  trainable params: {n_trainable:,} ({n_trainable/1e9:.2f}B)")
+        mp(f"  trainable params: {n_trainable:,} ({n_trainable/1e9:.2f}B)")
     elif args.init_from is not None:
         if not args.init_from.exists():
             sys.exit(f"--init-from path not found: {args.init_from}")
-        print(f"Loading prior adapter from {args.init_from} (cumulative chain)")
-        print(f"  (rank/alpha inherited from prior adapter_config.json; "
-              f"--rank/--lora-alpha CLI flags ignored.)")
+        mp(f"Loading prior adapter from {args.init_from} (cumulative chain)")
+        mp(f"  (rank/alpha inherited from prior adapter_config.json; "
+           f"--rank/--lora-alpha CLI flags ignored.)")
         from peft import PeftModel
-        # is_trainable=True keeps the LoRA layers tunable for continued training.
-        # Without it, PeftModel.from_pretrained loads adapters as inference-only.
         peft_model = PeftModel.from_pretrained(
             model, str(args.init_from), is_trainable=True
         )
-        peft_model.print_trainable_parameters()
+        if is_main:
+            peft_model.print_trainable_parameters()
     else:
-        print(f"Applying fresh LoRA (r={args.rank}, alpha={args.lora_alpha or 2*args.rank})...")
+        mp(f"Applying fresh LoRA (r={args.rank}, alpha={args.lora_alpha or 2*args.rank})...")
         from peft import LoraConfig, get_peft_model
         lora_cfg = LoraConfig(
             r=args.rank,
@@ -303,40 +331,50 @@ def main() -> None:
             bias="none",
         )
         peft_model = get_peft_model(model, lora_cfg)
-        peft_model.print_trainable_parameters()
+        if is_main:
+            peft_model.print_trainable_parameters()
 
     peft_model.train()
 
-    # 4. Optimizer + LR schedule.
-    n_seqs = len(packed)
-    steps_per_epoch = math.ceil(n_seqs / args.batch_size)
-    total_steps = args.max_steps or (steps_per_epoch * args.epochs)
+    # 4. Build a DataLoader so accelerator.prepare can shard for DDP.
+    from torch.utils.data import TensorDataset, DataLoader
+    dataset = TensorDataset(packed)
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
 
+    # 5. Optimizer.
     trainable = [p for p in peft_model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(
         trainable, lr=args.lr, weight_decay=WEIGHT_DECAY, betas=(0.9, 0.95)
     )
 
-    use_ckpt = not args.no_grad_ckpt
-    print(
-        f"Training: {n_seqs} seqs, batch {args.batch_size}, "
-        f"{total_steps} steps, grad_ckpt={use_ckpt}"
+    # 6. Wrap with Accelerator. Single-GPU = transparent. Multi-GPU = DDP.
+    peft_model, optimizer, dataloader = accelerator.prepare(
+        peft_model, optimizer, dataloader
     )
 
-    # 5. Loop.
+    n_seqs = len(packed)
+    # Each rank sees ~n_seqs/n_proc sequences per epoch via DistributedSampler.
+    steps_per_epoch = math.ceil(n_seqs / (args.batch_size * n_proc))
+    total_steps = args.max_steps or (steps_per_epoch * args.epochs)
+
+    use_ckpt = not args.no_grad_ckpt
+    mp(f"Training: {n_seqs} seqs total, per-rank batch={args.batch_size}, "
+       f"effective batch={args.batch_size * n_proc}, "
+       f"{total_steps} steps/rank, grad_ckpt={use_ckpt}")
+
+    # 7. Loop.
     step = 0
     t0 = time.time()
     done = False
     for epoch in range(args.epochs):
         if done:
             break
-        perm = torch.randperm(n_seqs)
-        for i in range(0, n_seqs, args.batch_size):
+        for batch_tuple in dataloader:
             if step >= total_steps:
                 done = True
                 break
-            idx = perm[i : i + args.batch_size]
-            batch = packed[idx].to(device, non_blocking=True)
+            # TensorDataset wraps in tuple; accelerator.prepare moves to device.
+            batch = batch_tuple[0]
 
             logits = forward_all_positions(peft_model, batch, use_grad_ckpt=use_ckpt)
 
@@ -347,7 +385,7 @@ def main() -> None:
                 shift_labels.view(-1),
             )
 
-            loss.backward()
+            accelerator.backward(loss)
 
             for g in optimizer.param_groups:
                 g["lr"] = lr_at_step(step, total_steps, WARMUP_STEPS, args.lr)
@@ -356,25 +394,28 @@ def main() -> None:
 
             if step % 10 == 0 or step == total_steps - 1:
                 el = time.time() - t0
-                tok_per_sec = (step + 1) * args.batch_size * args.seq_len / el
-                print(
-                    f"step {step:5d}/{total_steps}  "
-                    f"loss {loss.item():.4f}  "
-                    f"lr {optimizer.param_groups[0]['lr']:.2e}  "
-                    f"tok/s {tok_per_sec:7.0f}  "
-                    f"elapsed {el/60:.1f}m"
-                )
+                # Effective tok/s aggregates across all ranks.
+                tok_per_sec = (step + 1) * args.batch_size * args.seq_len * n_proc / el
+                mp(f"step {step:5d}/{total_steps}  "
+                   f"loss {loss.item():.4f}  "
+                   f"lr {optimizer.param_groups[0]['lr']:.2e}  "
+                   f"tok/s {tok_per_sec:7.0f}  "
+                   f"elapsed {el/60:.1f}m")
             step += 1
 
-    # 6. Save.
-    if args.full_ft:
-        print(f"\nSaving full state_dict to {out_dir}/model_state.pt ...")
-        torch.save(peft_model.state_dict(), out_dir / "model_state.pt")
-    else:
-        print(f"\nSaving adapter to {out_dir}...")
-        peft_model.save_pretrained(out_dir)
-    print(f"  contents: {sorted(p.name for p in out_dir.iterdir())}")
-    print("Done.")
+    # 8. Save (only main process; other ranks wait for it to finish).
+    accelerator.wait_for_everyone()
+    if is_main:
+        unwrapped = accelerator.unwrap_model(peft_model)
+        if args.full_ft:
+            mp(f"\nSaving full state_dict to {out_dir}/model_state.pt ...")
+            torch.save(unwrapped.state_dict(), out_dir / "model_state.pt")
+        else:
+            mp(f"\nSaving adapter to {out_dir}...")
+            unwrapped.save_pretrained(out_dir)
+        mp(f"  contents: {sorted(p.name for p in out_dir.iterdir())}")
+    accelerator.wait_for_everyone()
+    mp("Done.")
 
 
 if __name__ == "__main__":

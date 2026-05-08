@@ -96,7 +96,7 @@ Expect: Paris > London on the first probe (clear PASS), London > Paris
 on the second. If the smoke test fails, do not proceed — fix loading
 issues first.
 
-## 8. Run midtrain (~1-2 hours)
+## 8. Run midtrain (~1-2 hours, single-GPU)
 
 ```bash
 python train.py \
@@ -104,6 +104,31 @@ python train.py \
     --rank 32 \
     --out checkpoints/year_1931
 ```
+
+### Multi-GPU (DDP) — same training command, different launcher
+
+For ~Nx speedup at ~Nx hourly cost (same total $), launch via `accelerate`:
+
+```bash
+# 4-GPU DDP run. Each rank loads its own copy of Talkie on its own GPU;
+# DDP all-reduces gradients after each backward pass.
+accelerate launch --num_processes=4 --mixed_precision=no \
+    train.py \
+    --data data/nyt_1931.parquet \
+    --rank 32 \
+    --out checkpoints/year_1931
+```
+
+Key facts:
+- `--batch-size` is **per-rank**. With 4 GPUs and `--batch-size 8`, the
+  effective batch size is 32. To keep the same effective batch as a 1-GPU
+  run, divide `--batch-size` by N.
+- LoRA + DDP scales near-linearly (small adapter gradients all-reduce
+  cheaply). Expect ~3-3.5x speedup on 4 GPUs in practice.
+- Save happens only on the main process (rank 0); the script handles this
+  automatically via `accelerator.is_main_process`.
+- Output adapter is identical to a single-GPU run; downstream eval works
+  unchanged.
 
 What to watch:
 - **Loss should decrease** over the first 100-200 steps. Starts ~3-5,
