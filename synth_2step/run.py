@@ -291,6 +291,20 @@ def main() -> None:
         except Exception as e:  # noqa: BLE001
             return idx, [], e
 
+    def _write_line(f, line: str) -> None:
+        # Windows occasionally raises OSError 22 (Invalid argument) on long
+        # streaming writes to files even on local disks. Retry once with a
+        # flush so we don't lose hours of generation to a transient hiccup.
+        for attempt in range(3):
+            try:
+                f.write(line)
+                f.flush()
+                return
+            except OSError:
+                if attempt == 2:
+                    raise
+                time.sleep(0.5)
+
     seed_to_ideas: dict[int, list[dict]] = {}
     with ThreadPoolExecutor(max_workers=int(cfg.get("max_workers", 8))) as ex:
         futures = {ex.submit(_ideate, i, s): i for i, s in enumerate(seeds)}
@@ -300,12 +314,12 @@ def main() -> None:
                 idx, ideas, err = fut.result()
                 if err is not None:
                     n_failures += 1
-                    fail_f.write(json.dumps({"stage": "ideate", "seed_idx": idx,
+                    _write_line(fail_f, json.dumps({"stage": "ideate", "seed_idx": idx,
                                              "error": str(err), "type": type(err).__name__}) + "\n")
                     continue
                 seed_to_ideas[idx] = ideas
                 for j, idea in enumerate(ideas):
-                    ideas_f.write(json.dumps({
+                    _write_line(ideas_f, json.dumps({
                         "seed_idx": idx, "idea_idx": j, **idea
                     }, ensure_ascii=False) + "\n")
                     n_ideas_total += 1
@@ -350,14 +364,14 @@ def main() -> None:
             idea = args_tuple[3]
             if err is not None:
                 n_failures += 1
-                fail_f.write(json.dumps({
+                _write_line(fail_f, json.dumps({
                     "stage": "write", "seed_idx": seed_idx, "idea_idx": idea_idx,
                     "error": str(err), "type": type(err).__name__,
                 }) + "\n")
                 continue
             if text is None:
                 n_failures += 1
-                fail_f.write(json.dumps({
+                _write_line(fail_f, json.dumps({
                     "stage": "write", "seed_idx": seed_idx, "idea_idx": idea_idx,
                     "error": "parse_failed",
                 }) + "\n")
@@ -365,12 +379,12 @@ def main() -> None:
             bad = has_banned_term(text, banned)
             if bad is not None:
                 n_dropped += 1
-                fail_f.write(json.dumps({
+                _write_line(fail_f, json.dumps({
                     "stage": "write", "seed_idx": seed_idx, "idea_idx": idea_idx,
                     "reason": "banned_term", "term": bad,
                 }) + "\n")
                 continue
-            out_f.write(json.dumps({
+            _write_line(out_f, json.dumps({
                 "text": text,
                 "metadata": {
                     "seed_idx": seed_idx,

@@ -162,13 +162,14 @@ def call_openai(client, system: str, user: str, *,
 def parse_documents(content: str) -> list[str]:
     """Pull document strings out of a JSON response.
 
-    Accepts {"documents": [...]} (preferred) or a bare list. Rejects malformed
-    or empty results.
+    Accepts {"documents": [...]} (preferred) or a bare list. Raises
+    ValueError on malformed JSON so callers can record it as a failure
+    instead of silently dropping the seed.
     """
     try:
         obj = json.loads(content)
-    except json.JSONDecodeError:
-        return []
+    except json.JSONDecodeError as e:
+        raise ValueError(f"json_decode_error: {e}; head={content[:200]!r}") from e
     if isinstance(obj, list):
         items = obj
     elif isinstance(obj, dict):

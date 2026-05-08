@@ -20,7 +20,7 @@ out: ./out
 # OpenAI model.
 model: gpt-4o-mini
 temperature: 0.7
-max_tokens: 1024
+max_tokens: 4096           # ~500 tok per doc * n_per_seed, plus JSON overhead
 
 # Per-seed knobs.
 n_per_seed: 3              # number of synthetic documents to generate per seed
