@@ -285,6 +285,20 @@ def main() -> None:
         def tqdm(it, **_):
             return it
 
+    def _write_line(f, line: str) -> None:
+        # Windows occasionally raises OSError 22 (Invalid argument) on long
+        # streaming writes to files even on local disks. Retry with a flush
+        # so we don't lose hours of generation to a transient hiccup.
+        for attempt in range(3):
+            try:
+                f.write(line)
+                f.flush()
+                return
+            except OSError:
+                if attempt == 2:
+                    raise
+                time.sleep(0.5)
+
     with open(out_path, "w", encoding="utf-8") as out_f, \
          open(failures_path, "w", encoding="utf-8") as fail_f, \
          ThreadPoolExecutor(max_workers=int(cfg.get("max_workers", 8))) as ex:
@@ -293,7 +307,7 @@ def main() -> None:
             idx, docs, err = fut.result()
             if err is not None:
                 n_failures += 1
-                fail_f.write(json.dumps({
+                _write_line(fail_f, json.dumps({
                     "seed_idx": idx, "error": str(err), "type": type(err).__name__
                 }) + "\n")
                 continue
@@ -301,11 +315,11 @@ def main() -> None:
                 bad = has_banned_term(d, banned)
                 if bad is not None:
                     n_dropped_by_filter += 1
-                    fail_f.write(json.dumps({
+                    _write_line(fail_f, json.dumps({
                         "seed_idx": idx, "reason": "banned_term", "term": bad
                     }) + "\n")
                     continue
-                out_f.write(json.dumps({
+                _write_line(out_f, json.dumps({
                     "text": d,
                     "metadata": {"seed_idx": idx, "generator": "synth_naive"}
                 }, ensure_ascii=False) + "\n")
