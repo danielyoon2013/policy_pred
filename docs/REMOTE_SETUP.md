@@ -55,20 +55,25 @@ Sanity check: `ls -la ~/talkie_base/` should show `final.ckpt` (~53 GB) + `vocab
 
 ## 5. Point the code at remote paths
 
-The codebase respects two env vars for redirection on remote boxes (D:/ doesn't exist there). Set both:
+The codebase respects two env vars for redirection on remote boxes (D:/ doesn't exist there). Set both AND persist them so a fresh SSH session picks them up:
 
 ```bash
+# Persist (for future SSH sessions, login shells)
+echo 'export TALKIE_WEIGHTS_DIR=$HOME/talkie_base' >> ~/.bashrc
+echo 'export POLICY_PRED_DATA_ROOT=$HOME/policy_pred_data' >> ~/.bashrc
+
+# Apply now (current shell) — .bashrc isn't auto-sourced by an already-open shell
 export TALKIE_WEIGHTS_DIR=$HOME/talkie_base
 export POLICY_PRED_DATA_ROOT=$HOME/policy_pred_data
-mkdir -p $POLICY_PRED_DATA_ROOT
-mkdir -p ~/data
+mkdir -p $POLICY_PRED_DATA_ROOT ~/data
 
-# Persist for future SSH sessions on this pod:
-echo "export TALKIE_WEIGHTS_DIR=\$HOME/talkie_base" >> ~/.bashrc
-echo "export POLICY_PRED_DATA_ROOT=\$HOME/policy_pred_data" >> ~/.bashrc
+# Verify — both files MUST exist or training/eval will fail with FileNotFoundError
+ls -la $TALKIE_WEIGHTS_DIR/final.ckpt $TALKIE_WEIGHTS_DIR/vocab.txt
 ```
 
 `config.py` reads both env vars. With these set, all script outputs land at `$HOME/policy_pred_data/...` instead of `D:/hist_LLM/policy_pred/...`.
+
+**If you open a new SSH session later, re-export both before running anything** (the `.bashrc` line covers interactive logins, but some pods use non-interactive shells that skip it).
 
 ## 6. Smoke test the loader (~5-10 min)
 

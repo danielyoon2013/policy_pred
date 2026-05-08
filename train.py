@@ -175,9 +175,14 @@ def pack_tokens(token_lists: list[list[int]], eos_id: int, seq_len: int) -> torc
 
 def forward_all_positions(model, input_ids: torch.Tensor, use_grad_ckpt: bool) -> torch.Tensor:
     """[B, T, V] forward. Same body as TalkieBackend._forward_all_positions but
-    optionally gradient-checkpoints each transformer block. Works on either a
-    bare TalkieModel or a PEFT-wrapped one (PEFT proxies attribute access).
+    optionally gradient-checkpoints each transformer block. Works on a bare
+    TalkieModel, a PEFT-wrapped one (PEFT proxies attribute access), or a
+    DDP-wrapped one (DDP does NOT proxy attribute access, so we unwrap here).
+    Gradient sync still fires on backward() because DDP's reducer hooks are
+    attached to the parameters, not the forward path.
     """
+    if hasattr(model, "module") and not hasattr(model, "cos"):
+        model = model.module
     _, seq_len = input_ids.shape
     cos_sin = model.cos[:, :seq_len], model.sin[:, :seq_len]
 
