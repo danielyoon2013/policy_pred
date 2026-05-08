@@ -1,0 +1,16 @@
+# Eval-only baseline: Talkie 1930 base (no adapter) on the SS-1935 probe.
+# Used as the reference point against which trained adapters are compared.
+#
+# Run:
+#   python eval.py --experiment experiments/policy_1931_base.yaml --no-adapter
+name: policy_1931_base
+
+# No corpus / synth / train blocks — eval-only.
+
+eval:
+  evaluator: policy_battery
+  source: catalog
+  catalog_path: evaluators/catalog.yaml
+  filter:
+    id: ["social_security_1935"]
+  modes: [yes_no, likert5]

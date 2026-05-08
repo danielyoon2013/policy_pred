@@ -1,17 +1,18 @@
-# Remote setup — LoRA midtrain Talkie on year-1931 data
+# Remote setup — runbook for A100 pod
 
-End-to-end runbook for the V1 validation run: provision an A100 80GB,
-LoRA-midtrain Talkie on 1931 NYT data, and check whether the adapter
-shifted the model's behaviour. Expected total cost: ~$5-15.
+End-to-end runbook for training Talkie+LoRA on a rented GPU pod. Two experiments documented here:
+- **Experiment A**: math re-train with MC4-format synth, eval on GSM-MC (~$5-10, ~30 min on 4 GPUs)
+- **Experiment B**: policy POC for SS-1935, comparing synth_naive vs synth_2step (~$15-30, ~1.5 hrs)
+
+The setup section (steps 1-5) is the same for both; jump to the experiment-specific runbook once setup is done.
+
+---
 
 ## 1. Provision the box
 
-Pick any of: Lambda Labs (~$1.10/hr A100 80GB on-demand), vast.ai
-(~$0.80-1.50/hr spot), RunPod (similar). I'd use Lambda for the first
-run — no spot eviction risk during a 2-hour training job.
+Rent any of: Lambda Labs (~$1.10/hr A100 80GB on-demand), vast.ai (~$0.80-1.50/hr spot), RunPod (similar). For multi-GPU runs: **4× A100 80GB** is the sweet spot. For single-GPU, 1× A100 80GB is enough.
 
-Spec: **1× A100 80GB**, Ubuntu 22.04, Python 3.11+, CUDA 12.x. Default
-ephemeral disk is fine (we only need ~80 GB free).
+Spec: Ubuntu 22.04, Python 3.11+, CUDA 12.x. Default ephemeral disk OK (~80 GB free needed).
 
 SSH in. All commands below run on the remote box unless noted.
 
@@ -23,7 +24,9 @@ cd policy_pred
 git submodule update --init --recursive
 ```
 
-## 3. Python env (CUDA build of torch)
+If the box already has the repo from a previous session: `git pull && git submodule update --init --recursive`.
+
+## 3. Python env (CUDA torch + training/inference deps)
 
 ```bash
 python -m venv .venv
@@ -36,8 +39,8 @@ pip install torch --index-url https://download.pytorch.org/whl/cu121
 # Training extras
 pip install peft accelerate
 
-# Same deps the local box has
-pip install tiktoken huggingface-hub pyyaml pandas pyarrow numpy
+# Eval/inference + general deps
+pip install tiktoken huggingface-hub pyyaml pandas pyarrow numpy openai
 ```
 
 ## 4. Download Talkie weights (~5-10 min)
@@ -46,159 +49,227 @@ pip install tiktoken huggingface-hub pyyaml pandas pyarrow numpy
 hf download talkie-lm/talkie-1930-13b-base --local-dir ~/talkie_base
 ```
 
-(`huggingface-cli` was renamed to `hf` in late 2025; the old name now just
-prints a deprecation warning and exits.)
+(`huggingface-cli` was renamed to `hf` in late 2025.)
 
-Result: `~/talkie_base/{final.ckpt, vocab.txt, ...}`. Sanity check:
-```bash
-ls -la ~/talkie_base/
-# expect: final.ckpt (~53 GB) + vocab.txt (~4.6 MB)
-```
+Sanity check: `ls -la ~/talkie_base/` should show `final.ckpt` (~53 GB) + `vocab.txt` (~4.6 MB).
 
-## 5. Point the code at the remote weights path
+## 5. Point the code at remote paths
 
-Two options. Pick one.
+The codebase respects two env vars for redirection on remote boxes (D:/ doesn't exist there). Set both:
 
-### Env var (preferred — no code edit)
 ```bash
 export TALKIE_WEIGHTS_DIR=$HOME/talkie_base
-```
-Add it to `~/.bashrc` if you'll use this box across sessions. `config.py`
-respects this env var on every script invocation.
+export POLICY_PRED_DATA_ROOT=$HOME/policy_pred_data
+mkdir -p $POLICY_PRED_DATA_ROOT
+mkdir -p ~/data
 
-### Inline edit
-Edit `config.py`, change `TALKIE_WEIGHTS_DIR = ...` to your path. Don't
-commit this — the env-var path is the durable approach.
-
-## 6. Get 1931 training data onto the remote
-
-From your **local** box (not the remote):
-```bash
-scp D:/hist_LLM/additional_data/raw/news_archives/NYT_filtered_500char/nyt_1931.parquet \
-    user@REMOTE-IP:~/policy_pred/data/
+# Persist for future SSH sessions on this pod:
+echo "export TALKIE_WEIGHTS_DIR=\$HOME/talkie_base" >> ~/.bashrc
+echo "export POLICY_PRED_DATA_ROOT=\$HOME/policy_pred_data" >> ~/.bashrc
 ```
 
-(Create the `data/` dir first on the remote: `mkdir -p ~/policy_pred/data`.)
+`config.py` reads both env vars. With these set, all script outputs land at `$HOME/policy_pred_data/...` instead of `D:/hist_LLM/policy_pred/...`.
 
-NYT 1931 is ~50 MB and ~24K articles. Enough text (~30M tokens) to give
-the LoRA something to learn from in V1.
+## 6. Smoke test the loader (~5-10 min)
 
-## 7. Smoke test the loader (~5-10 min)
-
-Quick check that Talkie loads correctly on the remote before paying for
-a full training run:
+Cheap check that Talkie loads correctly before paying for a full training run:
 
 ```bash
 python scripts/smoke_talkie.py
 ```
 
-Expect: Paris > London on the first probe (clear PASS), London > Paris
-on the second. If the smoke test fails, do not proceed — fix loading
-issues first.
+Expected: Paris > London on the first probe (PASS), some preference on the second probe (often opposite-direction is fine — the absolute log-probs are tiny and noisy for very-low-prob tokens), and clear directionality on the SS-1930 probe (P(False) >> P(True), confirming the cutoff effect).
 
-## 8. Run midtrain (~1-2 hours, single-GPU)
+If the smoke test errors out (not just a content sanity-check fail), do not proceed; fix loading first.
+
+---
+
+# Experiment A: math re-train with MC4 format (~$5-10, ~30 min on 4 GPUs)
+
+**Goal**: test whether the GSM-MC chance-level result (24.6%) was a format-mismatch artifact. Train on MC4-format math synth (matches the GSM-MC eval format) instead of CoT-format.
+
+**Decision criterion**:
+- Accuracy ≥ 30% → format was the issue, pipeline picks up math signal when format-matched
+- Accuracy still ~25% → math is OOD for Talkie regardless of format; move on
+
+## A.1. From local box: scp the data
 
 ```bash
-python train.py \
-    --data data/nyt_1931.parquet \
-    --rank 32 \
-    --out checkpoints/year_1931
+# Replace REMOTE_USER@REMOTE_IP with your pod's connection string
+scp "D:/hist_LLM/periods/1900_1949/posttraining_data/synthetic/by_generator/gen_d_quantitative_mc4.jsonl" \
+    REMOTE_USER@REMOTE_IP:~/data/
+
+scp "D:/hist_LLM/eval_data/gsm_mc.jsonl" \
+    REMOTE_USER@REMOTE_IP:~/data/
 ```
 
-### Multi-GPU (DDP) — same training command, different launcher
-
-For ~Nx speedup at ~Nx hourly cost (same total $), launch via `accelerate`:
+## A.2. On remote: update YAML test_set path + train + eval
 
 ```bash
-# 4-GPU DDP run. Each rank loads its own copy of Talkie on its own GPU;
-# DDP all-reduces gradients after each backward pass.
+cd ~/policy_pred
+source .venv/bin/activate
+
+# Update YAML eval test_set to remote path (D:/ -> /root/data/)
+sed -i 's|D:/hist_LLM/eval_data/gsm_mc.jsonl|/root/data/gsm_mc.jsonl|' \
+    experiments/math_lora_histllm.yaml
+# (use $HOME/data instead of /root/data if your username isn't root)
+
+# 4-GPU DDP train. Per-rank batch 2 keeps effective batch ~8.
 accelerate launch --num_processes=4 --mixed_precision=no \
     train.py \
-    --data data/nyt_1931.parquet \
-    --rank 32 \
-    --out checkpoints/year_1931
+    --experiment experiments/math_lora_histllm.yaml \
+    --data ~/data/gen_d_quantitative_mc4.jsonl \
+    --batch-size 2
+
+# Full GSM-MC eval (1319 problems) on the trained adapter
+python eval.py --experiment experiments/math_lora_histllm.yaml
 ```
 
-Key facts:
-- `--batch-size` is **per-rank**. With 4 GPUs and `--batch-size 8`, the
-  effective batch size is 32. To keep the same effective batch as a 1-GPU
-  run, divide `--batch-size` by N.
-- LoRA + DDP scales near-linearly (small adapter gradients all-reduce
-  cheaply). Expect ~3-3.5x speedup on 4 GPUs in practice.
-- Save happens only on the main process (rank 0); the script handles this
-  automatically via `accelerator.is_main_process`.
-- Output adapter is identical to a single-GPU run; downstream eval works
-  unchanged.
+**Expected wall clock**: ~25-30 min total on 4 GPUs (vs ~2 hrs single-GPU).
 
-What to watch:
-- **Loss should decrease** over the first 100-200 steps. Starts ~3-5,
-  drops as the LoRA learns.
-- **`tok/s`** stays roughly constant after warmup; A100 80GB target is
-  ~3-8K tok/s for 13B + LoRA r=32 with grad checkpointing on.
-- **No OOM**. If it OOMs, reduce `--batch-size` to 4 or even 2.
+**Compare to**:
+- 18.2% — nanochat-1900-1949 SFT
+- 24.6% — our previous CoT-trained adapter
+- 24.0% — always-A baseline
 
-The output adapter at `checkpoints/year_1931/` is ~120 MB and contains
-`adapter_config.json` + `adapter_model.safetensors`.
-
-### Optional: tiny test run first
-If you want to verify the loop runs end-to-end before committing to the
-full ~1-2 hour run, do a 50-step smoke training:
-```bash
-python train.py \
-    --data data/nyt_1931.parquet \
-    --rank 32 \
-    --max-steps 50 \
-    --out checkpoints/test_run
-```
-~5-10 min on A100. Loss should drop a bit; that's enough to know the
-loop is working.
-
-## 9. Compare base vs base+adapter
+## A.3. Pull the result back to local
 
 ```bash
-python scripts/probe_with_adapter.py --adapter checkpoints/year_1931
+# From local box
+scp REMOTE_USER@REMOTE_IP:~/policy_pred_data/experiments/math_lora_histllm/eval.json \
+    "D:/hist_LLM/policy_pred/experiments/math_lora_histllm/"
 ```
 
-Reads:
-- **Sanity probes** (Paris/London) should still PASS — the adapter didn't
-  break the base.
-- **SS-1930** scores should differ from base. The script prints `Δ` per
-  option and a max-Δ summary. >0.05 nats means training had measurable
-  effect.
+---
 
-## 10. Pull the adapter back to local
+# Experiment B: Policy POC for Social Security 1935
 
-From your **local** box:
+**Goal**: end-to-end policy pipeline. Generate synth from 1931 legal corpus via BOTH `synth_naive` and `synth_2step` (~1000 seeds each, the same seed pool). Train two LoRAs, eval each on the SS-1935 probe (yes_no + likert5 modes), compare.
+
+## B.1. Local: slice corpus + run both synth methods
+
+This step happens on **your local box** (uses `D:/hist_LLM/...` raw corpus + the `synth_naive` and `synth_2step` packages we already shipped to Leland).
+
+### Phased rollout (smoke first, scale only if smoke is clean)
+
+**Smoke (~$2-4, ~10 min)** — 50 seeds, both methods:
 ```bash
-scp -r user@REMOTE-IP:~/policy_pred/checkpoints/year_1931 ./checkpoints/
+python sources/year_slice_legal.py --year 1931 \
+    --out D:/hist_LLM/policy_pred/years/1931/legal.parquet
+
+cd synth_naive
+python run.py --seeds D:/hist_LLM/policy_pred/years/1931/legal.parquet \
+    --out D:/hist_LLM/policy_pred/years/1931/naive_smoke/ \
+    --limit 50 --n-per-seed 4
+cd ..
+
+cd synth_2step
+python run.py --seeds D:/hist_LLM/policy_pred/years/1931/legal.parquet \
+    --out D:/hist_LLM/policy_pred/years/1931/2step_smoke/ \
+    --limit 50 --n-ideas 8
+cd ..
+
+# Hand-read 5-10 records from each smoke output. Are they era-faithful and
+# capturing moral/social discourse? If yes, scale up. If no, iterate prompts.
 ```
 
-120 MB; takes seconds. You now have a year-1931 LoRA adapter on local.
+**Scale (~$25-40, ~30-60 min)** — 1000 seeds, both methods:
+```bash
+cd synth_naive
+python run.py --seeds D:/hist_LLM/policy_pred/years/1931/legal.parquet \
+    --out D:/hist_LLM/policy_pred/years/1931/naive/ \
+    --limit 1000 --n-per-seed 4
+cd ..
 
-## 11. Stop the box
+cd synth_2step
+python run.py --seeds D:/hist_LLM/policy_pred/years/1931/legal.parquet \
+    --out D:/hist_LLM/policy_pred/years/1931/2step/ \
+    --limit 1000 --n-ideas 8
+cd ..
+```
 
-Don't forget. Lambda / RunPod don't stop billing automatically when you
-close the SSH session.
+## B.2. scp synth + battery CSV to remote
+
+```bash
+# From local box
+scp D:/hist_LLM/policy_pred/years/1931/naive/synth.jsonl \
+    REMOTE_USER@REMOTE_IP:~/data/policy_1931_naive.jsonl
+
+scp D:/hist_LLM/policy_pred/years/1931/2step/synth.jsonl \
+    REMOTE_USER@REMOTE_IP:~/data/policy_1931_2step.jsonl
+
+# Plus the policy battery CSV (the evaluator reads it)
+scp us_policy_event_battery_v4.csv \
+    REMOTE_USER@REMOTE_IP:~/policy_pred/
+```
+
+## B.3. On remote: eval base + train two LoRAs + eval each (~$15-30, ~1.5 hrs)
+
+```bash
+cd ~/policy_pred && source .venv/bin/activate
+
+# 1. Baseline: eval Talkie base (no adapter) on SS-1935 probe (~10 min)
+python eval.py --experiment experiments/policy_1931_base.yaml --no-adapter
+
+# 2. Train LoRA on naive synth (~25-30 min on 4 GPUs)
+accelerate launch --num_processes=4 --mixed_precision=no \
+    train.py \
+    --experiment experiments/policy_1931_naive.yaml \
+    --data ~/data/policy_1931_naive.jsonl \
+    --batch-size 2
+
+# 3. Eval the naive-trained adapter (~10 min)
+python eval.py --experiment experiments/policy_1931_naive.yaml
+
+# 4. Train LoRA on 2step synth (~25-30 min)
+accelerate launch --num_processes=4 --mixed_precision=no \
+    train.py \
+    --experiment experiments/policy_1931_2step.yaml \
+    --data ~/data/policy_1931_2step.jsonl \
+    --batch-size 2
+
+# 5. Eval the 2step-trained adapter (~10 min)
+python eval.py --experiment experiments/policy_1931_2step.yaml
+```
+
+## B.4. Pull eval.json files + plot (local)
+
+```bash
+# From local box
+for exp in policy_1931_base policy_1931_naive policy_1931_2step; do
+  scp REMOTE_USER@REMOTE_IP:~/policy_pred_data/experiments/$exp/eval.json \
+      "D:/hist_LLM/policy_pred/experiments/$exp/eval.json"
+done
+
+# Generate the comparison plot
+python scripts/plot_policy_compare.py \
+    --policy social_security_1935 \
+    --base D:/hist_LLM/policy_pred/experiments/policy_1931_base/eval.json \
+    --naive D:/hist_LLM/policy_pred/experiments/policy_1931_naive/eval.json \
+    --twostep D:/hist_LLM/policy_pred/experiments/policy_1931_2step/eval.json \
+    --out figures/ss1935_naive_vs_2step.png
+```
+
+The plot has 6 bars (3 models × 2 modes [yes_no, likert5]) showing P(SS implemented).
+
+---
+
+# Stop the box
+
+Don't forget. Lambda / RunPod don't auto-stop billing when you close the SSH session.
 
 ---
 
 ## Troubleshooting
 
-**`midtraining requires CUDA, got device=cpu`** — torch fell back to CPU
-build. `pip uninstall torch && pip install torch --index-url
-https://download.pytorch.org/whl/cu121`.
+**`midtraining requires CUDA, got device=cpu`** — torch fell back to CPU build. `pip uninstall torch && pip install torch --index-url https://download.pytorch.org/whl/cu121`.
 
-**OOM during training** — try `--batch-size 4` (or 2). If still OOM,
-also drop `--seq-len 1024`. Grad checkpointing is on by default; if
-you'd disabled it, re-enable it.
+**OOM during training** — drop `--batch-size 2` to `1`. If still OOM, also drop `--seq-len 1024`. Grad checkpointing is on by default.
 
-**`talkie.model` ImportError** — submodule not initialized. `git
-submodule update --init --recursive`.
+**`talkie.model` ImportError** — submodule not initialized. `git submodule update --init --recursive`.
 
-**HF download is slow** — set `HF_HUB_ENABLE_HF_TRANSFER=1` and `pip
-install hf_transfer` before re-running `huggingface-cli download`.
+**HF download is slow** — set `HF_HUB_ENABLE_HF_TRANSFER=1` and `pip install hf_transfer` before re-running `hf download`.
 
-**Adapter "doesn't move" the SS-1930 probe** — this is a real research
-finding, not a bug. Could mean: the rank is too low (try `--rank 128`),
-the training set is too small (need more 1931 text, not just NYT), or
-the probe form is too noisy (try a year-completion probe instead).
+**`accelerate launch` hangs at startup** — port conflict with a previous run. `pkill -f "python train.py"` and retry.
+
+**Multi-GPU saves only one process's adapter** — that's by design. Only rank 0 (main process) writes the checkpoint; other ranks call `accelerator.wait_for_everyone()` and exit. The adapter at `$POLICY_PRED_DATA_ROOT/experiments/<name>/checkpoint/` is the canonical output.

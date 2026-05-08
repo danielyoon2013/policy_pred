@@ -1,0 +1,31 @@
+# Train Talkie+LoRA on synth_naive output from 1931 legal corpus seeds, eval SS-1935.
+#
+# Pipeline:
+#   1. Local: sources/year_slice_legal.py --year 1931 -> legal.parquet
+#   2. Local: synth_naive/run.py --seeds legal.parquet --limit 1000 --n-per-seed 4
+#      -> synth.jsonl (~4000 records)
+#   3. scp synth.jsonl to remote:~/data/policy_1931_naive.jsonl
+#   4. Remote: accelerate launch --num_processes=4 --mixed_precision=no \
+#                  train.py --experiment experiments/policy_1931_naive.yaml \
+#                  --data ~/data/policy_1931_naive.jsonl --batch-size 2
+#   5. Remote: python eval.py --experiment experiments/policy_1931_naive.yaml
+name: policy_1931_naive
+
+train:
+  # Override --data on the CLI; the YAML default is local only.
+  data: D:/hist_LLM/policy_pred/years/1931/naive/synth.jsonl
+  method: lora
+  rank: 32
+  lora_alpha: 64
+  epochs: 1
+  lr: 1.0e-4
+  batch_size: 8     # per-rank; with 4 GPUs, --batch-size 2 keeps effective batch ~8
+  seq_len: 2048
+
+eval:
+  evaluator: policy_battery
+  source: catalog
+  catalog_path: evaluators/catalog.yaml
+  filter:
+    id: ["social_security_1935"]
+  modes: [yes_no, likert5]
