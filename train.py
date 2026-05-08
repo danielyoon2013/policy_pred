@@ -92,20 +92,31 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--full-ft", action="store_true",
                    help="Full fine-tuning instead of LoRA. Requires multi-GPU "
                         "FSDP (13B doesn't fit one A100 80GB at full FT).")
+    p.add_argument("--sft", action="store_true",
+                   help="SFT mode: for chat-format records (messages with "
+                        "user/assistant turns), mask the user-prompt tokens "
+                        "in the loss so only the assistant response trains. "
+                        "Without this flag, every token contributes to loss "
+                        "(continued-pretraining / midtraining style). "
+                        "Raw-text records always use full-sequence loss.")
     p.add_argument("--experiment", type=Path, default=None,
                    help="Resolve --data and --out from an experiment YAML "
                         "(reads experiments/<name>/synth.jsonl or corpus.parquet).")
     return p.parse_args()
 
 
-def render_chat_record(record: dict) -> str:
-    """Render a {messages: [...]} chat record as a single training string.
+def render_chat_record(record: dict) -> tuple[str, str]:
+    """Render a {messages: [...]} chat record as (prompt_str, response_str).
 
-    Plain User:/Assistant: format, no special tokens. The base model trains
-    on the whole rendered string with standard next-token loss; we don't
-    mask the prompt portion in V1 because Talkie isn't an instruction-tuned
-    model and we're effectively doing instruction-flavored continued
-    pretraining, not "real" SFT.
+    Plain User:/Assistant: format, no special tokens. The split point is
+    right after the final "Assistant: " marker — everything before goes
+    in prompt_str, the assistant content in response_str. Tokenizing the
+    two pieces separately and concatenating their token IDs avoids any
+    BPE-merge surprises across the prompt/response boundary.
+
+    Without --sft, the caller concatenates and trains on the full sequence
+    (continued-pretraining style). With --sft, only the response_str
+    tokens contribute to loss (real SFT).
     """
     parts: list[str] = []
     for msg in record["messages"]:
@@ -117,19 +128,33 @@ def render_chat_record(record: dict) -> str:
             parts.append(f"User: {content}")
         elif role == "assistant":
             parts.append(f"Assistant: {content}")
-    return "\n\n".join(parts)
+    rendered = "\n\n".join(parts)
+
+    # Find the start of the final assistant content; everything before is prompt.
+    asst_marker = "\n\nAssistant: "
+    last = rendered.rfind(asst_marker)
+    if last == -1:
+        # No assistant turn; treat the whole thing as raw text (no masking possible).
+        return ("", rendered)
+    boundary = last + len(asst_marker)
+    return (rendered[:boundary], rendered[boundary:])
 
 
-def load_documents(data_path: Path) -> list[str]:
-    """Load training documents. Auto-detects format by extension.
+def load_documents(data_path: Path) -> list[tuple[str, str]]:
+    """Load training documents as (prompt_str, response_str) tuples.
 
-    .parquet: text column (raw text, V1 policy CPT shape)
-    .jsonl:   chat records {"messages": [...]} (V2 SFT shape)
+    Chat-format records: prompt_str = "User: ... Assistant: ", response_str
+    = the assistant content. Raw-text records: prompt_str = "" (empty
+    sentinel meaning "no prompt to mask"), response_str = the full text.
+
+    Auto-detects format by extension.
+        .parquet: text column (V1 policy CPT shape; always raw text)
+        .jsonl:   chat records {"messages": [...]} or {"text": "..."}
     """
     suffix = data_path.suffix.lower()
     if suffix == ".jsonl":
         import json
-        docs: list[str] = []
+        docs: list[tuple[str, str]] = []
         with open(data_path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -139,17 +164,17 @@ def load_documents(data_path: Path) -> list[str]:
                 if "messages" in rec:
                     docs.append(render_chat_record(rec))
                 elif "text" in rec:
-                    docs.append(rec["text"])
-        print(f"  jsonl: {len(docs):,} chat records rendered")
+                    docs.append(("", rec["text"]))
+        print(f"  jsonl: {len(docs):,} records loaded")
         return docs
 
-    # parquet path
+    # parquet path — always raw text
     import pandas as pd
     df = pd.read_parquet(data_path)
     for col in ("text_cleaned", "combined_text", "cleaned_article", "text", "article"):
         if col in df.columns:
             print(f"  parquet: using column '{col}'")
-            return [t for t in df[col].dropna().tolist()
+            return [("", t) for t in df[col].dropna().tolist()
                     if isinstance(t, str) and t.strip()]
     raise KeyError(
         f"no text column found in {data_path}; "
@@ -157,20 +182,38 @@ def load_documents(data_path: Path) -> list[str]:
     )
 
 
-def pack_tokens(token_lists: list[list[int]], eos_id: int, seq_len: int) -> torch.Tensor:
-    """Concat docs with EOS separators, drop the trailing partial chunk."""
-    stream: list[int] = []
-    for toks in token_lists:
-        stream.extend(toks)
-        stream.append(eos_id)
-    n_full = len(stream) // seq_len
+def pack_tokens_and_labels(
+    token_lists: list[list[int]],
+    label_lists: list[list[int]],
+    eos_id: int,
+    seq_len: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Concat docs with EOS separators, packing input_ids and labels in lockstep.
+
+    Both streams use the same EOS separator at doc boundaries. EOS positions
+    in the labels stream are kept as the EOS token id (we want the model to
+    learn to emit EOS at boundaries). -100 positions in label_lists (used
+    for prompt-masking under --sft) flow through unchanged.
+    """
+    id_stream: list[int] = []
+    lbl_stream: list[int] = []
+    for toks, labs in zip(token_lists, label_lists):
+        id_stream.extend(toks)
+        lbl_stream.extend(labs)
+        id_stream.append(eos_id)
+        lbl_stream.append(eos_id)  # learn to stop at boundary
+    n_full = len(id_stream) // seq_len
     if n_full == 0:
         raise ValueError(
             f"not enough tokens to fill a single seq_len={seq_len} chunk "
-            f"(have {len(stream)})"
+            f"(have {len(id_stream)})"
         )
-    truncated = stream[: n_full * seq_len]
-    return torch.tensor(truncated, dtype=torch.long).view(n_full, seq_len)
+    truncated_ids = id_stream[: n_full * seq_len]
+    truncated_lbl = lbl_stream[: n_full * seq_len]
+    return (
+        torch.tensor(truncated_ids, dtype=torch.long).view(n_full, seq_len),
+        torch.tensor(truncated_lbl, dtype=torch.long).view(n_full, seq_len),
+    )
 
 
 def forward_all_positions(model, input_ids: torch.Tensor, use_grad_ckpt: bool) -> torch.Tensor:
@@ -292,12 +335,40 @@ def main() -> None:
 
     mp("Tokenizing...")
     eos_id = tokenizer.encode("<|endoftext|>", allowed_special="all")[0]
-    token_lists = [tokenizer.encode(d, allowed_special="all") for d in docs]
+    token_lists: list[list[int]] = []
+    label_lists: list[list[int]] = []
+    n_chat_records_masked = 0
+    for prompt_str, response_str in docs:
+        # Tokenize prompt and response separately so BPE merges don't cross
+        # the boundary; concatenated token IDs are what the model trains on.
+        if prompt_str:
+            prompt_ids = tokenizer.encode(prompt_str, allowed_special="all")
+        else:
+            prompt_ids = []
+        response_ids = tokenizer.encode(response_str, allowed_special="all")
+        ids = prompt_ids + response_ids
+
+        if args.sft and prompt_ids:
+            # SFT: mask the prompt portion; only response tokens train.
+            labels = [-100] * len(prompt_ids) + list(response_ids)
+            n_chat_records_masked += 1
+        else:
+            # CPT (or raw-text record): every token contributes to loss.
+            labels = list(ids)
+
+        token_lists.append(ids)
+        label_lists.append(labels)
+
     n_tokens = sum(len(t) for t in token_lists)
     mp(f"  {n_tokens:,} tokens total")
+    if args.sft:
+        mp(f"  --sft on: {n_chat_records_masked:,} of {len(docs):,} records "
+           f"have prompt-masked labels")
 
-    packed = pack_tokens(token_lists, eos_id, args.seq_len)
-    mp(f"  packed: {len(packed):,} sequences of {args.seq_len}")
+    packed_ids, packed_lbl = pack_tokens_and_labels(
+        token_lists, label_lists, eos_id, args.seq_len
+    )
+    mp(f"  packed: {len(packed_ids):,} sequences of {args.seq_len}")
 
     # 3. Apply LoRA, or full FT, depending on --full-ft.
     if args.full_ft:
@@ -343,7 +414,7 @@ def main() -> None:
 
     # 4. Build a DataLoader so accelerator.prepare can shard for DDP.
     from torch.utils.data import TensorDataset, DataLoader
-    dataset = TensorDataset(packed)
+    dataset = TensorDataset(packed_ids, packed_lbl)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
 
     # 5. Optimizer.
@@ -357,7 +428,7 @@ def main() -> None:
         peft_model, optimizer, dataloader
     )
 
-    n_seqs = len(packed)
+    n_seqs = len(packed_ids)
     # Each rank sees ~n_seqs/n_proc sequences per epoch via DistributedSampler.
     steps_per_epoch = math.ceil(n_seqs / (args.batch_size * n_proc))
     total_steps = args.max_steps or (steps_per_epoch * args.epochs)
@@ -379,15 +450,18 @@ def main() -> None:
                 done = True
                 break
             # TensorDataset wraps in tuple; accelerator.prepare moves to device.
-            batch = batch_tuple[0]
+            input_ids, labels = batch_tuple
 
-            logits = forward_all_positions(peft_model, batch, use_grad_ckpt=use_ckpt)
+            logits = forward_all_positions(peft_model, input_ids, use_grad_ckpt=use_ckpt)
 
+            # Standard next-token shift. labels carries -100 on masked
+            # (prompt) positions when --sft is on; otherwise labels == input_ids.
             shift_logits = logits[:, :-1, :].contiguous()
-            shift_labels = batch[:, 1:].contiguous()
+            shift_labels = labels[:, 1:].contiguous()
             loss = F.cross_entropy(
                 shift_logits.view(-1, shift_logits.size(-1)),
                 shift_labels.view(-1),
+                ignore_index=-100,
             )
 
             accelerator.backward(loss)

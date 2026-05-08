@@ -28,14 +28,15 @@ from pathlib import Path
 DEFAULT_TEST_SET = Path("D:/hist_LLM/eval_data/arc_challenge_test.jsonl")
 
 DEFAULT_PROMPT_TEMPLATE = (
-    "Question: {question}\n"
+    "User: Multiple Choice question: {question}\n"
+    "- {a}=A\n"
+    "- {b}=B\n"
+    "- {c}=C\n"
+    "- {d}=D\n"
     "\n"
-    "A. {a}\n"
-    "B. {b}\n"
-    "C. {c}\n"
-    "D. {d}\n"
+    "Respond only with the letter of the correct answer.\n"
     "\n"
-    "Answer:"
+    "Assistant:"
 )
 
 LETTERS = ("A", "B", "C", "D")

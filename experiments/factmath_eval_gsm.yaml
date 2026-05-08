@@ -1,0 +1,16 @@
+# Eval-only YAML: run GSM-MC on the Stage 2 factmath_sft adapter.
+# Same adapter as factmath_eval_arc.yaml, different evaluator.
+# Uses --adapter override; eval results land in
+# experiments/factmath_eval_gsm/eval.json.
+#
+# Run:
+#   sed -i 's|D:/.../gsm_mc.jsonl|/root/data/gsm_mc.jsonl|' \
+#       experiments/factmath_eval_gsm.yaml
+#   python eval.py --experiment experiments/factmath_eval_gsm.yaml \
+#       --adapter ~/policy_pred_data/experiments/factmath_sft/checkpoint
+name: factmath_eval_gsm
+
+eval:
+  evaluator: gsm_mc
+  test_set: D:/hist_LLM/eval_data/gsm_mc.jsonl
+  n_samples: null

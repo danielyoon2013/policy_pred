@@ -1,0 +1,25 @@
+# Stage 2 of the factmath pipeline: SFT (supervised fine-tuning) on
+# MC4 formats from gen_a_factual + gen_d_quantitative. Continues
+# training from the Stage 1 CPT adapter (--init-from). With --sft on,
+# only the assistant-letter tokens contribute to loss; the user-prompt
+# tokens are masked to -100. Teaches the model to output a single
+# letter when given an MC4 question in the trained chat shape.
+#
+# Usage on remote A100 (after scp-ing the SFT data file + having the
+# CPT adapter from factmath_cpt.yaml):
+#   1. scp factmath_sft_mix.jsonl REMOTE:~/data/
+#   2. accelerate launch --num_processes=4 --mixed_precision=no \
+#          train.py --experiment experiments/factmath_sft.yaml \
+#          --data ~/data/factmath_sft_mix.jsonl --batch-size 2 --sft \
+#          --init-from ~/policy_pred_data/experiments/factmath_cpt/checkpoint
+name: factmath_sft
+
+train:
+  data: C:/tmp/policy_pred/factmath_sft_mix.jsonl
+  method: lora
+  rank: 32
+  lora_alpha: 64
+  epochs: 1
+  lr: 1.0e-4
+  batch_size: 8
+  seq_len: 2048

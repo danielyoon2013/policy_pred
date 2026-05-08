@@ -1,0 +1,17 @@
+# Eval-only YAML: run ARC-Challenge on the Stage 2 factmath_sft adapter.
+# Uses the new --adapter override so eval.py loads the adapter from a
+# different experiment dir than this one (eval results land in
+# experiments/factmath_eval_arc/eval.json, adapter loaded from
+# experiments/factmath_sft/checkpoint).
+#
+# Run:
+#   sed -i 's|D:/.../arc_challenge_test.jsonl|/root/data/arc_challenge_test.jsonl|' \
+#       experiments/factmath_eval_arc.yaml
+#   python eval.py --experiment experiments/factmath_eval_arc.yaml \
+#       --adapter ~/policy_pred_data/experiments/factmath_sft/checkpoint
+name: factmath_eval_arc
+
+eval:
+  evaluator: arc_mc
+  test_set: D:/hist_LLM/eval_data/arc_challenge_test.jsonl
+  n_samples: null

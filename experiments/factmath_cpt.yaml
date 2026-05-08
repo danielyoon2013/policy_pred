@@ -1,0 +1,26 @@
+# Stage 1 of the factmath pipeline: CPT (continued pretraining) on
+# all non-MC formats from gen_a_factual + gen_d_quantitative. Pure
+# knowledge injection across factual recall + math reasoning chains.
+# Renders chat records as plain "User: ... Assistant: ..." text and
+# trains full-sequence loss (NO --sft flag). Output adapter feeds
+# into Stage 2 (factmath_sft.yaml) via train.py's --init-from.
+#
+# Usage on remote A100 (after scp-ing the combined data file):
+#   1. Locally: cat gen_a_factual_open + gen_a_factual_cot +
+#               gen_d_quantitative_open + gen_d_quantitative_cot
+#               > factmath_cpt_mix.jsonl
+#   2. scp factmath_cpt_mix.jsonl REMOTE:~/data/
+#   3. accelerate launch --num_processes=4 --mixed_precision=no \
+#          train.py --experiment experiments/factmath_cpt.yaml \
+#          --data ~/data/factmath_cpt_mix.jsonl --batch-size 2
+name: factmath_cpt
+
+train:
+  data: C:/tmp/policy_pred/factmath_cpt_mix.jsonl
+  method: lora
+  rank: 32
+  lora_alpha: 64
+  epochs: 1
+  lr: 1.0e-4
+  batch_size: 8
+  seq_len: 2048

@@ -39,6 +39,11 @@ def parse_args() -> argparse.Namespace:
                    help="Path to experiment YAML.")
     p.add_argument("--no-adapter", action="store_true",
                    help="Evaluate base only, regardless of cfg.")
+    p.add_argument("--adapter", type=Path, default=None,
+                   help="Override the auto-resolved adapter path (which is "
+                        "experiment_dir(name)/checkpoint). Use when two eval "
+                        "YAMLs share one trained adapter from a different "
+                        "experiment name.")
     p.add_argument("--force", action="store_true",
                    help="Overwrite existing eval.json.")
     return p.parse_args()
@@ -60,8 +65,16 @@ def main() -> None:
     backend = TalkieBackend(config.TALKIE_WEIGHTS_DIR)
     backend._ensure_loaded()
 
-    # Apply adapter if available and not suppressed.
-    adapter_dir: Path | None = None if args.no_adapter else (out_dir / "checkpoint")
+    # Apply adapter if available and not suppressed. --adapter overrides
+    # the default name-based lookup; useful when two eval YAMLs share one
+    # trained adapter (e.g. factmath_eval_arc + factmath_eval_gsm both
+    # pointing at experiments/factmath_sft/checkpoint).
+    if args.no_adapter:
+        adapter_dir = None
+    elif args.adapter is not None:
+        adapter_dir = args.adapter
+    else:
+        adapter_dir = out_dir / "checkpoint"
     if adapter_dir is not None and adapter_dir.exists():
         print(f"Applying adapter {adapter_dir}...")
         from peft import PeftModel
