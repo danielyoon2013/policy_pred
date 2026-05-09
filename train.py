@@ -130,8 +130,15 @@ def render_chat_record(record: dict) -> tuple[str, str]:
             parts.append(f"Assistant: {content}")
     rendered = "\n\n".join(parts)
 
-    # Find the start of the final assistant content; everything before is prompt.
-    asst_marker = "\n\nAssistant: "
+    # Split RIGHT BEFORE the space after "Assistant:" so the leading space
+    # stays attached to the response. Talkie's tokenizer merges " A" into a
+    # single BPE token (id 313), but tokenizes "Assistant: " + "A" as 4
+    # separate tokens (the trailing space gets split off). If we put the
+    # space in the prompt, training and eval tokenize the boundary
+    # differently and the trained behavior never fires at eval. Keeping
+    # " A" together in response_str matches both training and eval to the
+    # unified-string tokenization.
+    asst_marker = "\n\nAssistant:"
     last = rendered.rfind(asst_marker)
     if last == -1:
         # No assistant turn; treat the whole thing as raw text (no masking possible).
