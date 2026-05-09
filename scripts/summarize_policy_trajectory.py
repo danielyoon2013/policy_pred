@@ -49,13 +49,17 @@ def parse_args() -> argparse.Namespace:
 
 
 def auto_label(path: Path) -> str:
-    """Pull a year-like or 'base' label from the experiment name."""
-    s = str(path)
+    """Pull a year-like or 'base' label from the experiment name.
+
+    Check for 'base' BEFORE the year regex so that paths like
+    policy_1931_base/eval.json get labeled 'base' rather than '1931'.
+    """
+    s = str(path).lower()
+    if "base" in s:
+        return "base"
     m = re.search(r"(\d{4})", s)
     if m:
         return m.group(1)
-    if "base" in s.lower():
-        return "base"
     return path.parent.name
 
 
