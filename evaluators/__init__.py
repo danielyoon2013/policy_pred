@@ -26,6 +26,7 @@ REGISTRY = {
     "arc_mc": "arc_mc",                  # multi-choice science reasoning (1144 items, ARC-Challenge)
     "policy_probe": "policy_probe",      # V1 yes/no probe (catalog.yaml only)
     "policy_battery": "policy_battery",  # yes_no + likert5, catalog OR csv (211 events), no year in prompt
+    "policy_battery_variants": "policy_battery_variants",  # variant-aware: mean+std over N paraphrases
     # Future drop-ins:
     # "humaneval": "humaneval",         # cheap general-cap sanity
 }

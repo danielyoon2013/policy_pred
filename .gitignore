@@ -41,3 +41,7 @@ synth_2step/out/
 
 # Local data lives outside the repo tree (under D:\hist_LLM\...) so no rule needed.
 synth_*.zip
+
+# Generated artifacts (OpenAI-paraphrased question variants, trajectory CSVs, etc.)
+# These are reproducible from scripts/data_prep/* — no need to version them.
+data_artifacts/

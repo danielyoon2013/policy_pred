@@ -64,23 +64,41 @@ def auto_label(path: Path) -> str:
 
 
 def extract(path: Path, policy_id: str) -> dict | None:
-    """Return {p_yes, likert, logp_yes, logp_no, raw_likert} or None on miss."""
+    """Pull policy scores from an eval.json. Handles both:
+      - policy_battery (single-question): scores.yes_no.p_yes, scores.likert5.score
+      - policy_battery_variants (mean+std over N variants): scores.yes_no.mean_p_yes,
+        std_p_yes, scores.likert5.mean_score, std_score
+    Returns None if the policy isn't in this file.
+    """
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
     for p in data["results"]["policies"]:
         if p["id"] != policy_id:
             continue
         scores = p["scores"]
-        out = {}
+        out: dict = {}
         if "yes_no" in scores:
             yn = scores["yes_no"]
-            out["p_yes"] = yn["p_yes"]
-            out["logp_yes"] = yn["logprobs"]["Yes"]
-            out["logp_no"] = yn["logprobs"]["No"]
+            # Variant-aware fields take precedence; fall back to single-question.
+            if "mean_p_yes" in yn:
+                out["p_yes"] = yn["mean_p_yes"]
+                out["p_yes_std"] = yn.get("std_p_yes")
+                out["n_variants"] = yn.get("n_variants")
+            else:
+                out["p_yes"] = yn.get("p_yes")
+                out["p_yes_std"] = None
+                if "logprobs" in yn:
+                    out["logp_yes"] = yn["logprobs"].get("Yes")
+                    out["logp_no"] = yn["logprobs"].get("No")
         if "likert5" in scores:
             lk = scores["likert5"]
-            out["likert"] = lk["score"]
-            out["likert_probs"] = lk["probs"]
+            if "mean_score" in lk:
+                out["likert"] = lk["mean_score"]
+                out["likert_std"] = lk.get("std_score")
+                out["n_variants"] = lk.get("n_variants", out.get("n_variants"))
+            else:
+                out["likert"] = lk.get("score")
+                out["likert_std"] = None
         return out
     return None
 
@@ -116,8 +134,20 @@ def main() -> None:
             return (0, label)
     pairs = sorted(zip(eval_paths, labels), key=sort_key)
 
+    # Detect whether ANY eval has variant std fields → drives header format.
+    any_variants = any(
+        (extract(p, args.policy) or {}).get("p_yes_std") is not None
+        or (extract(p, args.policy) or {}).get("likert_std") is not None
+        for p, _ in pairs
+    )
+
     print(f"Policy: {args.policy}")
-    header = f"  {'label':<10s}  {'P(yes)':>8s}  {'likert':>8s}  {'logp_Yes':>10s}  {'logp_No':>10s}"
+    if any_variants:
+        header = (f"  {'label':<10s}  {'P(yes)':>8s}  {'pY_std':>7s}"
+                  f"  {'likert':>8s}  {'lk_std':>7s}  {'n_var':>5s}")
+    else:
+        header = (f"  {'label':<10s}  {'P(yes)':>8s}  {'likert':>8s}"
+                  f"  {'logp_Yes':>10s}  {'logp_No':>10s}")
     print(header)
     print("  " + "-" * (len(header) - 2))
 
@@ -128,22 +158,34 @@ def main() -> None:
             print(f"  {label:<10s}  (policy {args.policy!r} not found in {path.name})")
             continue
         p_yes = scores.get("p_yes")
+        p_yes_std = scores.get("p_yes_std")
         likert = scores.get("likert")
-        logp_y = scores.get("logp_yes")
-        logp_n = scores.get("logp_no")
+        likert_std = scores.get("likert_std")
+        n_var = scores.get("n_variants")
+
         line = f"  {label:<10s}"
-        line += f"  {p_yes:>8.3f}" if p_yes is not None else f"  {'-':>8s}"
-        line += f"  {likert:>8.3f}" if likert is not None else f"  {'-':>8s}"
-        line += f"  {logp_y:>10.3f}" if logp_y is not None else f"  {'-':>10s}"
-        line += f"  {logp_n:>10.3f}" if logp_n is not None else f"  {'-':>10s}"
+        line += f"  {p_yes:>+8.3f}" if p_yes is not None else f"  {'-':>8s}"
+        if any_variants:
+            line += f"  {p_yes_std:>7.3f}" if p_yes_std is not None else f"  {'-':>7s}"
+            line += f"  {likert:>+8.3f}" if likert is not None else f"  {'-':>8s}"
+            line += f"  {likert_std:>7.3f}" if likert_std is not None else f"  {'-':>7s}"
+            line += f"  {n_var:>5d}" if n_var is not None else f"  {'-':>5s}"
+        else:
+            line += f"  {likert:>+8.3f}" if likert is not None else f"  {'-':>8s}"
+            logp_y = scores.get("logp_yes")
+            logp_n = scores.get("logp_no")
+            line += f"  {logp_y:>10.3f}" if logp_y is not None else f"  {'-':>10s}"
+            line += f"  {logp_n:>10.3f}" if logp_n is not None else f"  {'-':>10s}"
         print(line)
+
         rows.append({
             "label": label,
             "path": str(path),
             "p_yes": p_yes,
+            "p_yes_std": p_yes_std,
             "likert": likert,
-            "logp_yes": logp_y,
-            "logp_no": logp_n,
+            "likert_std": likert_std,
+            "n_variants": n_var,
         })
 
     if args.out is not None:

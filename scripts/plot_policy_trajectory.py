@@ -48,14 +48,25 @@ def parse_args() -> argparse.Namespace:
 
 
 def extract_scores(eval_json_path: Path, policy_id: str) -> dict:
+    """Pull P(yes) and likert from an eval.json. Returns both point values and
+    std (if eval was variant-aware; otherwise std=None). Handles:
+      - policy_battery: scores.yes_no.p_yes, scores.likert5.score
+      - policy_battery_variants: scores.yes_no.mean_p_yes/std_p_yes,
+        scores.likert5.mean_score/std_score
+    """
     with open(eval_json_path, encoding="utf-8") as f:
         data = json.load(f)
     for p in data["results"]["policies"]:
-        if p["id"] == policy_id:
-            return {
-                "yes_no": p["scores"]["yes_no"]["p_yes"],
-                "likert5": p["scores"]["likert5"]["score"],
-            }
+        if p["id"] != policy_id:
+            continue
+        yn = p["scores"].get("yes_no", {})
+        lk = p["scores"].get("likert5", {})
+        return {
+            "yes_no":     yn.get("mean_p_yes",   yn.get("p_yes")),
+            "yes_no_std": yn.get("std_p_yes"),
+            "likert5":     lk.get("mean_score",  lk.get("score")),
+            "likert5_std": lk.get("std_score"),
+        }
     raise KeyError(f"policy {policy_id!r} not found in {eval_json_path}")
 
 
@@ -71,53 +82,74 @@ def main() -> None:
         )
 
     yes_no_vals: list[float] = []
+    yes_no_stds: list[float] = []
     likert_vals: list[float] = []
+    likert_stds: list[float] = []
     for year, path in zip(args.years, args.evals):
         scores = extract_scores(path, args.policy)
         yes_no_vals.append(scores["yes_no"])
+        yes_no_stds.append(scores.get("yes_no_std") or 0.0)
         likert_vals.append(scores["likert5"])
+        likert_stds.append(scores.get("likert5_std") or 0.0)
+
+    has_error_bars = any(s > 0 for s in yes_no_stds + likert_stds)
 
     print(f"Policy: {args.policy}")
-    print(f"  {'year':<8}  {'P(yes)':>8}  {'likert':>8}")
-    for y, p_yes, l in zip(args.years, yes_no_vals, likert_vals):
-        print(f"  {y:<8}  {p_yes:>8.3f}  {l:>8.3f}")
+    if has_error_bars:
+        print(f"  {'year':<8}  {'P(yes)':>9}  {'±std':>6}  {'likert':>9}  {'±std':>6}")
+        for y, p_yes, ps, l, ls in zip(args.years, yes_no_vals, yes_no_stds,
+                                        likert_vals, likert_stds):
+            print(f"  {y:<8}  {p_yes:>+9.3f}  {ps:>6.3f}  {l:>+9.3f}  {ls:>6.3f}")
+    else:
+        print(f"  {'year':<8}  {'P(yes)':>9}  {'likert':>9}")
+        for y, p_yes, l in zip(args.years, yes_no_vals, likert_vals):
+            print(f"  {y:<8}  {p_yes:>+9.3f}  {l:>+9.3f}")
 
     # Plot. X axis is integer position 0..N-1 because "base" isn't a year.
     fig, ax = plt.subplots(figsize=(9, 5))
     x = list(range(len(args.years)))
 
-    ax.plot(x, yes_no_vals, marker="o", linewidth=2, color="#4c72b0",
-            label="P(yes) — yes/no probe")
-    ax.plot(x, likert_vals, marker="s", linewidth=2, color="#dd8452",
-            label="Likert weighted score (0-1)")
+    if has_error_bars:
+        ax.errorbar(x, yes_no_vals, yerr=yes_no_stds, marker="o", linewidth=2,
+                    color="#4c72b0", capsize=3, label="P(yes) — yes/no probe")
+        ax.errorbar(x, likert_vals, yerr=likert_stds, marker="s", linewidth=2,
+                    color="#dd8452", capsize=3,
+                    label="Likert score (centered, [-1, +1])")
+    else:
+        ax.plot(x, yes_no_vals, marker="o", linewidth=2, color="#4c72b0",
+                label="P(yes) — yes/no probe")
+        ax.plot(x, likert_vals, marker="s", linewidth=2, color="#dd8452",
+                label="Likert score (centered, [-1, +1])")
 
     # Reference lines.
-    ax.axhline(0.5, color="grey", linestyle="--", linewidth=0.8, alpha=0.6,
-               label="0.5 (no signal)")
+    ax.axhline(0.0, color="grey", linestyle="--", linewidth=0.8, alpha=0.6,
+               label="0 (no signal / uncertain)")
+    ax.axhline(0.5, color="lightgrey", linestyle=":", linewidth=0.6, alpha=0.5)
 
     # Mark enactment year if it appears among the year labels (as int string).
     enact_str = str(args.enactment_year)
     if enact_str in args.years:
         enact_x = args.years.index(enact_str)
         ax.axvline(enact_x, color="red", linestyle=":", linewidth=1.0, alpha=0.7,
-                   label=f"enacted (Aug {args.enactment_year})")
+                   label=f"enacted ({args.enactment_year})")
 
     ax.set_xticks(x)
     ax.set_xticklabels(args.years)
     ax.set_xlabel("Training-data cutoff year (cumulative)")
-    ax.set_ylabel("P(implemented)")
-    ax.set_ylim(0, 1.0)
+    ax.set_ylabel("Probability / Likert score")
+    # Y range needs to cover both P(yes) [0,1] and centered likert [-1,+1].
+    ax.set_ylim(-1.1, 1.1)
     ax.set_title(args.title or
-                 f"P({args.policy} implemented) trajectory — base + cumulative CPT")
-    ax.legend(loc="upper left")
+                 f"{args.policy} — trajectory across cumulative-CPT year-models")
+    ax.legend(loc="best")
 
     # Annotate each point with its value for readability.
     for xi, p_yes in zip(x, yes_no_vals):
-        ax.annotate(f"{p_yes:.2f}", xy=(xi, p_yes),
+        ax.annotate(f"{p_yes:+.2f}", xy=(xi, p_yes),
                     xytext=(0, 8), textcoords="offset points",
                     ha="center", fontsize=8, color="#4c72b0")
     for xi, l in zip(x, likert_vals):
-        ax.annotate(f"{l:.2f}", xy=(xi, l),
+        ax.annotate(f"{l:+.2f}", xy=(xi, l),
                     xytext=(0, -14), textcoords="offset points",
                     ha="center", fontsize=8, color="#dd8452")
 

@@ -41,10 +41,13 @@ from pathlib import Path
 from typing import Any
 
 
-EVALUATOR_VERSION = "v3.0"
+EVALUATOR_VERSION = "v4.0"  # v4: centered likert (-1..+1) + agreement options + normative-form prompts
 
-LIKERT_OPTIONS = [" Very likely", " Likely", " Uncertain", " Unlikely", " Very unlikely"]
-LIKERT_VALUES = [1.0, 0.75, 0.5, 0.25, 0.0]
+# Agreement-form likert (works naturally for normative "Should X?" questions). Centered
+# so Uncertain = 0, Strongly agree = +1, Strongly disagree = -1. P(yes_no) maps the same
+# semantic axis to a 0..1 scale; the two modes are complementary uncertainty estimates.
+LIKERT_OPTIONS = [" Strongly agree", " Agree", " Uncertain", " Disagree", " Strongly disagree"]
+LIKERT_VALUES = [1.0, 0.5, 0.0, -0.5, -1.0]
 
 YESNO_OPTIONS = [" Yes", " No"]
 
@@ -54,15 +57,23 @@ YESNO_OPTIONS = [" Yes", " No"]
 # ---------------------------------------------------------------------------
 
 def _load_catalog(path: Path) -> list[dict]:
-    """Load the V1 5-policy YAML catalog. Returns list of normalized dicts."""
+    """Load the V1 5-policy YAML catalog. Returns list of normalized dicts.
+
+    The catalog stores `description` as a factual paraphrase (e.g. "national
+    program providing income to retired workers..."). We synthesize a
+    normative question from it ("Should the United States have X?") so the
+    catalog path uses the same probe shape as the CSV path.
+    """
     import yaml
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
     out: list[dict] = []
     for p in data["policies"]:
+        description = " ".join(p["description"].split())
         out.append({
             "id": p["id"],
-            "description": " ".join(p["description"].split()),  # collapse ws
+            "question": f"Should the United States have {description}?",
+            "description": description,
             "implementation_year": p.get("implementation_year"),
             "anticipation_start_year": p.get("anticipation_start_year"),
         })
@@ -70,13 +81,24 @@ def _load_catalog(path: Path) -> list[dict]:
 
 
 def _load_csv(path: Path) -> list[dict]:
-    """Load us_policy_event_battery_v4.csv. Returns list of normalized dicts."""
+    """Load us_policy_event_battery_v4.csv. Returns list of normalized dicts.
+
+    Pulls `benchmark_question` (already in normative "Should X?" form) directly
+    from the CSV — that's what the probe scores. Keeps `adoption_object` as a
+    `description` field for display + plot labels.
+    """
     import pandas as pd
     df = pd.read_csv(path)
     out: list[dict] = []
     for _, row in df.iterrows():
+        question = str(row.get("benchmark_question", "")).strip()
+        if not question:
+            # Fallback: synthesize from adoption_object if benchmark_question is empty.
+            description = " ".join(str(row["adoption_object"]).split())
+            question = f"Should the United States have {description}?"
         out.append({
             "id": str(row["event_id"]),
+            "question": question,
             "description": " ".join(str(row["adoption_object"]).split()),
             "implementation_year": int(row["event_year"]),
             "anticipation_start_year": None,  # not in CSV
@@ -101,27 +123,25 @@ def _apply_filter(items: list[dict], filter_cfg: dict) -> list[dict]:
 # Scoring
 # ---------------------------------------------------------------------------
 
-def _build_yesno_prompt(description: str) -> str:
-    """Sentence-completion prompt; no year reference."""
+def _build_yesno_prompt(question: str) -> str:
+    """Yes/no prompt. The question is a normative 'Should X?' phrasing."""
+    return f"{question}\n\nAnswer:"
+
+
+def _build_likert_prompt(question: str) -> str:
+    """Agreement-style likert prompt. The question is a normative 'Should X?' phrasing."""
     return (
-        f"Is it likely that the United States has {description}?\n"
+        f"Respond to the following question by rating your agreement:\n"
+        f"\n"
+        f"{question}\n"
         f"\n"
         f"Answer:"
     )
 
 
-def _build_likert_prompt(description: str) -> str:
-    """Sentence-completion prompt; no year reference."""
-    return (
-        f"How likely is it that the United States has {description}?\n"
-        f"\n"
-        f"Answer:"
-    )
-
-
-def _score_yesno(backend, description: str) -> dict:
+def _score_yesno(backend, question: str) -> dict:
     """Score the yes/no probe and return P(yes) + raw logprobs."""
-    prompt = _build_yesno_prompt(description)
+    prompt = _build_yesno_prompt(question)
     scores = backend.score_continuations(prompt, YESNO_OPTIONS)
     logp_yes, logp_no = scores
     # Normalize via log-sum-exp for stability.
@@ -136,9 +156,9 @@ def _score_yesno(backend, description: str) -> dict:
     }
 
 
-def _score_likert(backend, description: str) -> dict:
-    """Score the 5-option Likert probe; return weighted score + per-option probs."""
-    prompt = _build_likert_prompt(description)
+def _score_likert(backend, question: str) -> dict:
+    """Score the 5-option agreement likert; return weighted (centered) score + probs."""
+    prompt = _build_likert_prompt(question)
     scores = backend.score_continuations(prompt, LIKERT_OPTIONS)
     # Softmax over the 5 options for a proper distribution.
     m = max(scores)
@@ -150,7 +170,7 @@ def _score_likert(backend, description: str) -> dict:
         "prompt": prompt,
         "logprobs": dict(zip([o.strip() for o in LIKERT_OPTIONS], scores)),
         "probs": dict(zip([o.strip() for o in LIKERT_OPTIONS], probs)),
-        "score": weighted,
+        "score": weighted,  # centered: [-1, +1]; positive = agree
     }
 
 
@@ -187,24 +207,25 @@ def run(backend, cfg: dict) -> dict:
         scores: dict[str, Any] = {}
 
         if "yes_no" in modes:
-            scores["yes_no"] = _score_yesno(backend, policy["description"])
+            scores["yes_no"] = _score_yesno(backend, policy["question"])
 
         if "likert5" in modes:
-            scores["likert5"] = _score_likert(backend, policy["description"])
+            scores["likert5"] = _score_likert(backend, policy["question"])
 
         # One-line summary per policy for visual scan.
         summary = f"  {policy['id']:<32s}"
         if "yes_no" in scores:
             summary += f"  P(yes)={scores['yes_no']['p_yes']:.3f}"
         if "likert5" in scores:
-            summary += f"  likert={scores['likert5']['score']:.3f}"
+            summary += f"  likert={scores['likert5']['score']:+.3f}"  # centered: show sign
         print(summary)
 
         results.append({
             "id": policy["id"],
             "implementation_year": policy.get("implementation_year"),
             "anticipation_start_year": policy.get("anticipation_start_year"),
-            "description": policy["description"],
+            "question": policy["question"],
+            "description": policy.get("description"),
             "scores": scores,
             "elapsed_sec": time.time() - t0,
         })
