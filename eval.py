@@ -44,6 +44,11 @@ def parse_args() -> argparse.Namespace:
                         "experiment_dir(name)/checkpoint). Use when two eval "
                         "YAMLs share one trained adapter from a different "
                         "experiment name.")
+    p.add_argument("--evaluator", type=str, default=None,
+                   help="Override cfg.eval.evaluator from the YAML. Use to "
+                        "rerun an existing experiment with a different "
+                        "evaluator without editing the YAML (e.g. "
+                        "policy_battery -> policy_battery_variants).")
     p.add_argument("--force", action="store_true",
                    help="Overwrite existing eval.json.")
     return p.parse_args()
@@ -88,9 +93,11 @@ def main() -> None:
             print("--no-adapter: base-only eval.")
         adapter_label = None
 
-    # Dispatch to the configured evaluator.
+    # Dispatch to the configured evaluator (CLI --evaluator overrides YAML).
     eval_cfg = dict(cfg["eval"])  # copy so we can write into it
-    evaluator_name = eval_cfg["evaluator"]
+    evaluator_name = args.evaluator or eval_cfg["evaluator"]
+    if args.evaluator and args.evaluator != eval_cfg.get("evaluator"):
+        print(f"--evaluator override: {eval_cfg.get('evaluator')!r} -> {args.evaluator!r}")
     evaluator = evaluators.get(evaluator_name)
     print(f"\nRunning evaluator '{evaluator_name}'...")
     t0 = time.time()
