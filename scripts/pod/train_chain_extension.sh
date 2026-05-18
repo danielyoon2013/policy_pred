@@ -29,7 +29,7 @@
 #
 set -uo pipefail   # NOT -e — continue past per-year failures so the chain can recover
 
-START_YEAR="${1:-1936}"
+START_YEAR="${1:-1931}"
 END_YEAR="${2:-2020}"
 EVAL_MODE="${3:-eval_at_end}"   # "eval_every_year" | "eval_at_end" | "no_eval"
 
@@ -62,15 +62,19 @@ if [[ -d ".venv" ]]; then
     source .venv/bin/activate
 fi
 
-# --- Verify prior chain link (1935) is present ---
-prev_ckpt="${EXPS_DIR}/policy_$((START_YEAR - 1))_naive/checkpoint"
-if [[ ! -d "$prev_ckpt" ]]; then
-    echo "ERROR: previous-year checkpoint not found at $prev_ckpt"
-    echo "       Cumulative chain needs the prior year's adapter to --init-from."
-    echo "       Make sure earlier years (e.g. 1931-1935) are trained first."
-    exit 1
+# --- Verify prior chain link is present (or special-case year 1931 = first link) ---
+if [[ "$START_YEAR" -eq 1931 ]]; then
+    echo "  Year 1931 is the first link in the chain → no --init-from (trains fresh on base)."
+else
+    prev_ckpt="${EXPS_DIR}/policy_$((START_YEAR - 1))_naive/checkpoint"
+    if [[ ! -d "$prev_ckpt" ]]; then
+        echo "ERROR: previous-year checkpoint not found at $prev_ckpt"
+        echo "       Cumulative chain needs the prior year's adapter to --init-from."
+        echo "       Re-train earlier years first, or start at START_YEAR=1931."
+        exit 1
+    fi
+    echo "  Initial init-from: $prev_ckpt (year $((START_YEAR - 1)))"
 fi
-echo "  Initial init-from: $prev_ckpt (year $((START_YEAR - 1)))"
 echo
 
 # --- Loop years ---
@@ -101,7 +105,8 @@ for y in $(seq "$START_YEAR" "$END_YEAR"); do
         n_failed=$((n_failed + 1))
         continue
     fi
-    if [[ ! -d "$prev_ckpt" ]]; then
+    # Year 1931 starts fresh on base — no prior checkpoint expected.
+    if [[ "$y" -ne 1931 ]] && [[ ! -d "$prev_ckpt" ]]; then
         echo "  ERROR: prior-year checkpoint missing at $prev_ckpt"
         n_failed=$((n_failed + 1))
         continue
@@ -109,14 +114,22 @@ for y in $(seq "$START_YEAR" "$END_YEAR"); do
 
     n_records=$(wc -l < "$synth_file")
     echo "  Training on $synth_file ($n_records records)"
-    echo "  --init-from $prev_ckpt"
+
+    # Year 1931 is the first link → no --init-from. Every other year init-froms the prior.
+    if [[ "$y" -eq 1931 ]]; then
+        init_from_args=""
+        echo "  (no --init-from; year 1931 trains fresh on base)"
+    else
+        init_from_args="--init-from $prev_ckpt"
+        echo "  --init-from $prev_ckpt"
+    fi
 
     yr_start=$(date +%s)
     if accelerate launch --num_processes=4 --mixed_precision=no train.py \
         --experiment "experiments/policy_${y}_naive.yaml" \
         --data "$synth_file" \
         --batch-size 2 \
-        --init-from "$prev_ckpt"
+        $init_from_args
     then
         yr_elapsed=$(( $(date +%s) - yr_start ))
         echo "  TRAIN DONE: $((yr_elapsed / 60)) min"
