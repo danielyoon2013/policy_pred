@@ -1,0 +1,32 @@
+# Train Talkie+LoRA on synth_naive output from 1994 legal corpus seeds, eval SS-1935.
+# Year-1994 link in the cumulative trajectory chain (1931 -> 1994 -> ... -> 1935).
+#
+# Cumulative chain: --init-from points at the prior year's adapter so the
+# year-1994 model = base + LoRA trained on synth(1931..1994).
+#
+# Pipeline:
+#   1. Local: sources/year_slice_legal.py --year 1994 -> legal.parquet (on C:)
+#   2. Local: synth_naive/run.py --seeds legal.parquet --limit 1000 --n-per-seed 4
+#      -> synth.jsonl
+#   3. scp synth.jsonl to remote:~/data/policy_1994_naive.jsonl
+#   4. Remote: accelerate launch --num_processes=4 --mixed_precision=no #                  train.py --experiment experiments/policy_1994_naive.yaml #                  --data ~/data/policy_1994_naive.jsonl --batch-size 2 #                  --init-from ~/policy_pred_data/experiments/policy_1931_naive/checkpoint
+#   5. Remote: python eval.py --experiment experiments/policy_1994_naive.yaml
+name: policy_1994_naive
+
+train:
+  data: C:/tmp/policy_pred/years/1994/naive/synth.jsonl
+  method: lora
+  rank: 32
+  lora_alpha: 64
+  epochs: 1
+  lr: 1.0e-4
+  batch_size: 8
+  seq_len: 2048
+
+eval:
+  evaluator: policy_battery
+  source: catalog
+  catalog_path: evaluators/catalog.yaml
+  filter:
+    id: ["social_security_1935"]
+  modes: [yes_no, likert5]
