@@ -508,6 +508,15 @@ def main() -> None:
             torch.save(unwrapped.state_dict(), out_dir / "model_state.pt")
         else:
             mp(f"\nSaving adapter to {out_dir}...")
+            # peft.save_pretrained -> create_or_update_model_card does
+            # `"_name_or_path" in model.config`. Talkie's GPTConfig isn't
+            # dict-like; add __contains__ at the class level so the check
+            # falls through to hasattr.
+            base = getattr(unwrapped, "base_model", None)
+            inner = getattr(base, "model", None) if base is not None else None
+            cfg_obj = getattr(inner, "config", None) or getattr(unwrapped, "config", None)
+            if cfg_obj is not None and not hasattr(type(cfg_obj), "__contains__"):
+                type(cfg_obj).__contains__ = lambda self, k: hasattr(self, k)
             unwrapped.save_pretrained(out_dir)
         mp(f"  contents: {sorted(p.name for p in out_dir.iterdir())}")
     accelerator.wait_for_everyone()
