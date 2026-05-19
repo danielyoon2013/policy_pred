@@ -398,6 +398,11 @@ def main() -> None:
         mp(f"  (rank/alpha inherited from prior adapter_config.json; "
            f"--rank/--lora-alpha CLI flags ignored.)")
         from peft import PeftModel
+        # peft >=0.10 calls model.config.get("tie_word_embeddings") inside
+        # inject_adapter. Talkie's GPTConfig is a plain dataclass-like object
+        # without .get(), so shim it before peft touches it.
+        if hasattr(model, "config") and not hasattr(model.config, "get"):
+            model.config.get = lambda k, default=None: getattr(model.config, k, default)
         peft_model = PeftModel.from_pretrained(
             model, str(args.init_from), is_trainable=True
         )
@@ -413,6 +418,11 @@ def main() -> None:
             lora_dropout=0.0,
             bias="none",
         )
+        # peft >=0.10 calls model.config.get("tie_word_embeddings") inside
+        # inject_adapter. Talkie's GPTConfig is a plain dataclass-like object
+        # without .get(), so shim it before peft touches it.
+        if hasattr(model, "config") and not hasattr(model.config, "get"):
+            model.config.get = lambda k, default=None: getattr(model.config, k, default)
         peft_model = get_peft_model(model, lora_cfg)
         if is_main:
             peft_model.print_trainable_parameters()
