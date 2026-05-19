@@ -32,6 +32,9 @@ set -uo pipefail   # NOT -e — continue past per-year failures so the chain can
 START_YEAR="${1:-1931}"
 END_YEAR="${2:-2020}"
 EVAL_MODE="${3:-eval_at_end}"   # "eval_every_year" | "eval_at_end" | "no_eval"
+# GPU count: override with `export NUM_PROCESSES=8` (or pass via env); auto-detect otherwise.
+NUM_PROCESSES="${NUM_PROCESSES:-$(nvidia-smi -L 2>/dev/null | wc -l)}"
+if [[ -z "$NUM_PROCESSES" || "$NUM_PROCESSES" -lt 1 ]]; then NUM_PROCESSES=4; fi
 
 # Resolve env vars.
 export TALKIE_WEIGHTS_DIR="${TALKIE_WEIGHTS_DIR:-${HOME}/talkie_base}"
@@ -45,6 +48,7 @@ echo "  Pod runbook: cumulative chain training 1936-2020"
 echo "============================================================="
 echo "  Year range:    ${START_YEAR}..${END_YEAR}"
 echo "  Eval mode:     ${EVAL_MODE}"
+echo "  GPUs:          ${NUM_PROCESSES}"
 echo "  Talkie:        $TALKIE_WEIGHTS_DIR"
 echo "  Data root:     $POLICY_PRED_DATA_ROOT"
 echo "  Synth files:   $DATA_DIR/policy_<Y>_naive.jsonl"
@@ -132,7 +136,7 @@ for y in $(seq "$START_YEAR" "$END_YEAR"); do
     fi
 
     yr_start=$(date +%s)
-    if accelerate launch --num_processes=4 --mixed_precision=no train.py \
+    if accelerate launch --num_processes=$NUM_PROCESSES --mixed_precision=no train.py \
         --experiment "experiments/policy_${y}_naive.yaml" \
         --data "$synth_file" \
         --batch-size 2 \
