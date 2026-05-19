@@ -25,8 +25,6 @@ train:
 
 eval:
   evaluator: policy_battery
-  source: catalog
-  catalog_path: evaluators/catalog.yaml
-  filter:
-    id: ["social_security_1935"]
+  source: csv
+  csv_path: us_policy_event_battery_v4.csv
   modes: [yes_no, likert5]
