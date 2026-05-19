@@ -94,10 +94,17 @@ for y in $(seq "$START_YEAR" "$END_YEAR"); do
     echo "  YEAR $y  (init-from $prev_year)"
     echo "============================================================"
 
-    if [[ -d "$ckpt_dir" ]]; then
+    # Only skip if the checkpoint actually contains an adapter — a bare empty
+    # directory left over from a crashed earlier run is NOT a valid checkpoint
+    # and would fool a subsequent year's --init-from into loading nothing.
+    if [[ -f "$ckpt_dir/adapter_config.json" ]]; then
         echo "  SKIP: checkpoint already exists at $ckpt_dir"
         n_skipped=$((n_skipped + 1))
         continue
+    fi
+    if [[ -d "$ckpt_dir" ]]; then
+        echo "  WARN: stub checkpoint dir at $ckpt_dir (no adapter_config.json); removing and retraining"
+        rm -rf "$ckpt_dir"
     fi
 
     if [[ ! -f "$synth_file" ]]; then
