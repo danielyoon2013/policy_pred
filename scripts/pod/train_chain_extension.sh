@@ -150,7 +150,7 @@ for y in $(seq "$START_YEAR" "$END_YEAR"); do
     # Optional per-year eval.
     if [[ "$EVAL_MODE" == "eval_every_year" ]]; then
         echo "  --- Eval $y (variant-aware) ---"
-        python eval.py \
+        python3 eval.py \
             --experiment "experiments/policy_${y}_naive.yaml" \
             --evaluator policy_battery_variants \
             --force || true
@@ -169,7 +169,7 @@ if [[ "$EVAL_MODE" == "eval_at_end" ]] && [[ $n_trained -gt 0 ]]; then
         ckpt_dir="${EXPS_DIR}/policy_${y}_naive/checkpoint"
         if [[ -d "$ckpt_dir" ]]; then
             echo "  Eval $y..."
-            python eval.py \
+            python3 eval.py \
                 --experiment "experiments/policy_${y}_naive.yaml" \
                 --evaluator policy_battery_variants \
                 --force || true

@@ -136,7 +136,7 @@ for exp in "${EXPERIMENTS[@]}"; do
     if [[ "$exp" == *"_base" ]]; then
         extra_args="--no-adapter"
     fi
-    python eval.py \
+    python3 eval.py \
         --experiment "experiments/${exp}.yaml" \
         --evaluator policy_battery_variants \
         --force \
@@ -149,7 +149,7 @@ echo
 echo "============================================================="
 echo "  Final SS-1935 trajectory (mean ± std across 100 variants)"
 echo "============================================================="
-python scripts/summarize_policy_trajectory.py \
+python3 scripts/summarize_policy_trajectory.py \
     --policy "$POLICY_FOR_SUMMARY" \
     --glob "$POLICY_PRED_DATA_ROOT/experiments/policy_*/eval.json"
 
