@@ -36,8 +36,11 @@ pip install --upgrade pip
 # CUDA torch (NOT the CPU build the local box uses)
 pip install torch --index-url https://download.pytorch.org/whl/cu121
 
-# Training extras
-pip install peft accelerate
+# Training extras — versions pinned because newer transformers (>=4.55) ships
+# a MoE module that calls torch.library.custom_op with a signature the cu121
+# torch wheel doesn't accept, and peft transitively imports transformers at
+# `from peft import LoraConfig`, which crashes training before it starts.
+pip install 'transformers==4.46.3' 'peft==0.13.2' accelerate
 
 # Eval/inference + general deps
 pip install tiktoken huggingface-hub pyyaml pandas pyarrow numpy openai
