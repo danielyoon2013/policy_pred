@@ -27,4 +27,5 @@ eval:
   evaluator: policy_battery
   source: csv
   csv_path: us_policy_event_battery_v4.csv
+  lookback_years: 10
   modes: [yes_no, likert5]

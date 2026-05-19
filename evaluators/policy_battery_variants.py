@@ -170,8 +170,28 @@ def run(backend, cfg: dict) -> dict:
     print(f"  loaded {len(policies)} policies from {path}")
 
     policies = _apply_filter(policies, cfg.get("filter") or {})
+
+    # Lookback-window filter: each year-model Y should probe only policies
+    # enacted in [Y, Y + lookback_years]. That gives every policy a clean
+    # -lookback..0 relative-time series across the chain.
+    lookback_years = cfg.get("lookback_years")
+    if lookback_years is not None:
+        import re as _re
+        exp_name = cfg.get("_experiment_name", "")
+        m = _re.search(r"_(\d{4})_", exp_name) or _re.search(r"(\d{4})", exp_name)
+        if m:
+            model_year = int(m.group(1))
+            lo, hi = model_year, model_year + int(lookback_years)
+            before = len(policies)
+            policies = [p for p in policies
+                        if lo <= int(p.get("implementation_year", -1)) <= hi]
+            print(f"  lookback filter (model_year={model_year}, "
+                  f"window=[{lo},{hi}]): {before} -> {len(policies)} policies")
+
     if not policies:
-        raise ValueError(f"no policies survived filter: {cfg.get('filter')}")
+        print(f"  no policies in lookback window for this year-model; skipping")
+        return {"experiment_name": cfg.get("_experiment_name"),
+                "n_policies": 0, "policies": []}
     print(f"  after filter: {len(policies)} policies")
 
     variants_dir = Path(cfg.get("variants_dir") or "data_artifacts/question_variants")

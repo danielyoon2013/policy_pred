@@ -101,6 +101,9 @@ def main() -> None:
 
     # Dispatch to the configured evaluator (CLI --evaluator overrides YAML).
     eval_cfg = dict(cfg["eval"])  # copy so we can write into it
+    # Surface the experiment name to evaluators so they can derive the
+    # year-model index for lookback-window filtering.
+    eval_cfg["_experiment_name"] = name
     evaluator_name = args.evaluator or eval_cfg["evaluator"]
     if args.evaluator and args.evaluator != eval_cfg.get("evaluator"):
         print(f"--evaluator override: {eval_cfg.get('evaluator')!r} -> {args.evaluator!r}")
