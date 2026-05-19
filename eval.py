@@ -83,6 +83,12 @@ def main() -> None:
     if adapter_dir is not None and adapter_dir.exists():
         print(f"Applying adapter {adapter_dir}...")
         from peft import PeftModel
+        # peft >=0.10 calls model.config.get("tie_word_embeddings") inside
+        # inject_adapter. Talkie's GPTConfig is a plain dataclass-like object
+        # without .get(), so shim it before peft touches it.
+        cfg = getattr(backend._model, "config", None)
+        if cfg is not None and not hasattr(cfg, "get"):
+            cfg.get = lambda k, default=None: getattr(cfg, k, default)
         backend._model = PeftModel.from_pretrained(backend._model, str(adapter_dir))
         backend._model.eval()
         adapter_label = str(adapter_dir)
