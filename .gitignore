@@ -45,3 +45,9 @@ synth_*.zip
 # Generated artifacts (OpenAI-paraphrased question variants, trajectory CSVs, etc.)
 # These are reproducible from scripts/data_prep/* — no need to version them.
 data_artifacts/
+
+# Symlinks/junctions pointing at external data (hist_llm, synth outputs)
+data_links/
+
+# Generated plot outputs
+figures/

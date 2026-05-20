@@ -149,28 +149,53 @@ class TalkieBackend:
     def score_continuations(
         self, prompt: str, continuations: Sequence[str]
     ) -> list[float]:
+        """Length-normalized log-prob of each continuation given the prompt.
+
+        Batches all continuations into a single padded forward pass. At
+        batch=1 the GPU is memory-bandwidth bound (one full 26 GB weight
+        read per pass to score a few dozen tokens), so batching multiple
+        continuations through one read is nearly free — typical 5-7x
+        speedup at the continuation counts used by the policy battery
+        (2 for yes/no, 5 for likert). Right-padding is safe because
+        Talkie is causal-only: padded tokens after the continuation
+        can't influence log-probs at the continuation positions.
+        """
         self._ensure_loaded()
         tok = self._tokenizer
         prompt_ids = tok.encode(prompt)
+        prompt_len = len(prompt_ids)
 
-        results: list[float] = []
+        # Tokenize all continuations up front; reject any that vanish.
+        cont_ids_list: list[list[int]] = []
         for cont in continuations:
             cont_ids = tok.encode(cont)
             if not cont_ids:
                 raise ValueError(f"continuation tokenises to empty: {cont!r}")
-            full_ids = prompt_ids + cont_ids
-            x = torch.tensor([full_ids], dtype=torch.long, device=self._device)
+            cont_ids_list.append(cont_ids)
 
-            logits = self._forward_all_positions(x)  # [1, T, V]
-            log_probs = F.log_softmax(logits[0], dim=-1)  # [T, V]
+        # Build a right-padded [B, T] batch of prompt+continuation sequences.
+        seqs = [prompt_ids + ci for ci in cont_ids_list]
+        max_len = max(len(s) for s in seqs)
+        # Pad with 0 — irrelevant which token id we pick since right-padded
+        # positions are never read (we only score positions inside the
+        # continuation, which are strictly before any padding).
+        padded = torch.zeros((len(seqs), max_len), dtype=torch.long,
+                             device=self._device)
+        for i, s in enumerate(seqs):
+            padded[i, :len(s)] = torch.tensor(s, dtype=torch.long,
+                                              device=self._device)
 
-            # Position i in full_ids is predicted by logits at index i-1.
-            # The continuation occupies positions len(prompt_ids) .. len(full_ids)-1.
+        logits = self._forward_all_positions(padded)  # [B, T, V]
+        log_probs = F.log_softmax(logits, dim=-1)     # [B, T, V]
+
+        results: list[float] = []
+        for i, cont_ids in enumerate(cont_ids_list):
+            # Position prompt_len+j in seq i is the j-th continuation
+            # token, predicted by the logits at position prompt_len+j-1.
             total = 0.0
-            for i, tok_id in enumerate(cont_ids):
-                pos = len(prompt_ids) + i
-                total += log_probs[pos - 1, tok_id].item()
-
+            for j, tok_id in enumerate(cont_ids):
+                pos = prompt_len + j
+                total += log_probs[i, pos - 1, tok_id].item()
             results.append(total / len(cont_ids))
         return results
 

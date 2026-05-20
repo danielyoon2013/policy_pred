@@ -144,17 +144,29 @@ def main() -> None:
     ax.plot(mean_xs, mean_ys, marker="o", linewidth=3, color="#c44e52",
             label=f"Cross-policy mean ({args.mode})")
 
-    # Reference lines.
+    # Reference lines + auto-scaled Y limits.
+    # The theoretical range ([-1, +1] for likert, [0, 1] for P(yes)) is
+    # usually much wider than what the model actually emits — likert mass
+    # piles up near "Uncertain"=0 so observed values often live in [-0.25, 0].
+    # Plotting at theoretical range hides the trajectory shape; instead pad
+    # the actual data range by 20%.
+    all_vals = [v for pts in by_policy.values() for _, v, _ in pts]
+    lo_raw, hi_raw = min(all_vals), max(all_vals)
+    span = hi_raw - lo_raw if hi_raw > lo_raw else 0.1
+    pad = 0.2 * span
+    y_lo, y_hi = lo_raw - pad, hi_raw + pad
     if args.mode == "likert5":
         ax.axhline(0.0, color="grey", linestyle="--", linewidth=0.8, alpha=0.6,
                    label="0 (uncertain / no signal)")
         ax.set_ylabel("Likert score (centered, [-1, +1])")
-        ax.set_ylim(-1.1, 1.1)
+        # Keep 0 visible on the y-axis even if all data is below it — the
+        # zero line is the methodological reference.
+        ax.set_ylim(min(y_lo, -0.02), max(y_hi, 0.02))
     else:
         ax.axhline(0.5, color="grey", linestyle="--", linewidth=0.8, alpha=0.6,
                    label="0.5 (no signal)")
         ax.set_ylabel("P(yes)")
-        ax.set_ylim(0.0, 1.0)
+        ax.set_ylim(max(0.0, y_lo), min(1.0, y_hi))
 
     ax.axvline(0, color="red", linestyle=":", linewidth=1.0, alpha=0.7,
                label="enactment year")
