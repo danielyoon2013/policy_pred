@@ -45,7 +45,7 @@ if str(_HERE.parent) not in sys.path:
     sys.path.insert(0, str(_HERE.parent))
 
 from policy_pred import config  # noqa: E402
-from policy_pred.talkie import TalkieBackend  # noqa: E402
+from policy_pred.backends import load_backend  # noqa: E402
 
 
 # Defaults; overridable via CLI.
@@ -54,12 +54,6 @@ BATCH_SIZE = 8
 LEARNING_RATE = 1e-4
 WARMUP_STEPS = 100
 WEIGHT_DECAY = 0.01
-
-# All seven Linear layers per transformer block — standard LoRA target set.
-TARGET_MODULES = [
-    "attn_query", "attn_key", "attn_value", "attn_resid",
-    "mlp_gate", "mlp_linear", "mlp_resid",
-]
 
 
 def parse_args() -> argparse.Namespace:
@@ -261,12 +255,20 @@ def lr_at_step(step: int, total: int, warmup: int, peak: float) -> float:
 def main() -> None:
     args = parse_args()
 
+    # Load the experiment YAML once if provided. Empty dict means no
+    # experiment (e.g. --data + --year direct path); backend defaults to
+    # talkie via load_backend's fallback.
+    if args.experiment is not None:
+        from policy_pred.corpus import experiment_dir, load_experiment
+        experiment_cfg = load_experiment(args.experiment)
+    else:
+        experiment_cfg = {}
+
     # Resolve data path. Priority: --data > --experiment > --year.
     if args.data is not None:
         data_path = args.data
     elif args.experiment is not None:
-        from policy_pred.corpus import experiment_dir, load_experiment
-        cfg = load_experiment(args.experiment)
+        cfg = experiment_cfg
         exp_dir = experiment_dir(cfg["name"])
         # Resolution order:
         #   1. cfg.train.data (explicit external path; bypasses corpus/synth stages)
@@ -296,8 +298,7 @@ def main() -> None:
     if args.out is not None:
         out_dir = args.out
     elif args.experiment is not None:
-        from policy_pred.corpus import experiment_dir, load_experiment
-        out_dir = experiment_dir(load_experiment(args.experiment)["name"]) / "checkpoint"
+        out_dir = experiment_dir(experiment_cfg["name"]) / "checkpoint"
     elif args.year is not None:
         out_dir = config.year_checkpoint_dir(args.year)
     else:
@@ -320,11 +321,14 @@ def main() -> None:
            f"Per-rank batch={args.batch_size}, "
            f"effective batch={args.batch_size * n_proc}.")
 
-    # 1. Load Talkie base. Each rank loads its own copy on its own GPU
+    # 1. Load base model via the dispatcher (model_type comes from the YAML;
+    # defaults to talkie). Each rank loads its own copy on its own GPU
     # (CUDA_VISIBLE_DEVICES is set per rank by `accelerate launch`).
-    mp(f"Loading Talkie from {config.TALKIE_WEIGHTS_DIR}...")
-    backend = TalkieBackend(config.TALKIE_WEIGHTS_DIR)
+    model_type = (experiment_cfg.get("model_type") or "talkie").lower()
+    backend = load_backend(experiment_cfg)
+    mp(f"Loading {model_type} from {backend.weights_dir}...")
     backend._ensure_loaded()
+    backend.prepare_for_peft()  # backend-specific shims (no-op for HF models)
     model = backend._model
     tokenizer = backend._tokenizer
     device = backend._device
@@ -398,11 +402,6 @@ def main() -> None:
         mp(f"  (rank/alpha inherited from prior adapter_config.json; "
            f"--rank/--lora-alpha CLI flags ignored.)")
         from peft import PeftModel
-        # peft >=0.10 calls model.config.get("tie_word_embeddings") inside
-        # inject_adapter. Talkie's GPTConfig is a plain dataclass-like object
-        # without .get(), so shim it before peft touches it.
-        if hasattr(model, "config") and not hasattr(model.config, "get"):
-            model.config.get = lambda k, default=None: getattr(model.config, k, default)
         peft_model = PeftModel.from_pretrained(
             model, str(args.init_from), is_trainable=True
         )
@@ -414,15 +413,10 @@ def main() -> None:
         lora_cfg = LoraConfig(
             r=args.rank,
             lora_alpha=args.lora_alpha or 2 * args.rank,
-            target_modules=TARGET_MODULES,
+            target_modules=list(backend.LORA_TARGET_MODULES),
             lora_dropout=0.0,
             bias="none",
         )
-        # peft >=0.10 calls model.config.get("tie_word_embeddings") inside
-        # inject_adapter. Talkie's GPTConfig is a plain dataclass-like object
-        # without .get(), so shim it before peft touches it.
-        if hasattr(model, "config") and not hasattr(model.config, "get"):
-            model.config.get = lambda k, default=None: getattr(model.config, k, default)
         peft_model = get_peft_model(model, lora_cfg)
         if is_main:
             peft_model.print_trainable_parameters()
@@ -508,15 +502,6 @@ def main() -> None:
             torch.save(unwrapped.state_dict(), out_dir / "model_state.pt")
         else:
             mp(f"\nSaving adapter to {out_dir}...")
-            # peft.save_pretrained -> create_or_update_model_card does
-            # `"_name_or_path" in model.config`. Talkie's GPTConfig isn't
-            # dict-like; add __contains__ at the class level so the check
-            # falls through to hasattr.
-            base = getattr(unwrapped, "base_model", None)
-            inner = getattr(base, "model", None) if base is not None else None
-            cfg_obj = getattr(inner, "config", None) or getattr(unwrapped, "config", None)
-            if cfg_obj is not None and not hasattr(type(cfg_obj), "__contains__"):
-                type(cfg_obj).__contains__ = lambda self, k: hasattr(self, k)
             unwrapped.save_pretrained(out_dir)
         mp(f"  contents: {sorted(p.name for p in out_dir.iterdir())}")
     accelerator.wait_for_everyone()

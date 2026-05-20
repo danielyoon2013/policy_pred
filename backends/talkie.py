@@ -20,9 +20,19 @@ import torch.nn.functional as F
 
 
 # Make the vendored package importable without requiring `pip install -e`.
-_VENDOR_SRC = Path(__file__).parent / "models" / "talkie_vendor" / "src"
+# This file lives at backends/talkie.py, so the repo root is one level up.
+_VENDOR_SRC = Path(__file__).parent.parent / "models" / "talkie_vendor" / "src"
 if _VENDOR_SRC.exists() and str(_VENDOR_SRC) not in sys.path:
     sys.path.insert(0, str(_VENDOR_SRC))
+
+
+# Names of nn.Linear modules within each TalkieModel transformer block that
+# LoRA should attach to. Architecture-specific — lives here, not in train.py,
+# because every backend has different module names.
+LORA_TARGET_MODULES = [
+    "attn_query", "attn_key", "attn_value", "attn_resid",
+    "mlp_gate", "mlp_linear", "mlp_resid",
+]
 
 
 def _pick_device() -> torch.device:
@@ -78,6 +88,10 @@ def _load_ckpt_streamed(weights_dir: Path, device: torch.device):
 
 
 class TalkieBackend:
+    # Mirror the module-level constant on the class so the dispatcher /
+    # train.py can read `backend.LORA_TARGET_MODULES` without a separate import.
+    LORA_TARGET_MODULES = LORA_TARGET_MODULES
+
     def __init__(self, weights_dir):
         self.weights_dir = Path(weights_dir)
         self._model = None
@@ -94,6 +108,22 @@ class TalkieBackend:
             self.weights_dir / "vocab.txt", style="base"
         )
         self._model = _load_ckpt_streamed(self.weights_dir, self._device)
+
+    def prepare_for_peft(self) -> None:
+        """Make Talkie's GPTConfig dict-like enough for peft >= 0.10.
+
+        peft's inject_adapter does `model_config.get("tie_word_embeddings")`
+        and `"_name_or_path" in model_config`. Talkie's GPTConfig is a plain
+        dataclass without either method; this attaches the missing surface.
+        Idempotent and safe to call multiple times.
+        """
+        self._ensure_loaded()
+        cfg = self._model.config
+        if not hasattr(cfg, "get"):
+            cfg.get = lambda k, default=None: getattr(cfg, k, default)
+        cls = type(cfg)
+        if not hasattr(cls, "__contains__"):
+            cls.__contains__ = lambda self, k: hasattr(self, k)
 
     def _forward_all_positions(self, input_ids: torch.Tensor) -> torch.Tensor:
         """Forward returning [B, T, V] logits.

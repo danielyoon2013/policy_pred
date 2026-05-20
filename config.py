@@ -14,6 +14,15 @@ TALKIE_WEIGHTS_DIR = Path(
     os.environ.get("TALKIE_WEIGHTS_DIR") or DATA_ROOT / "models" / "talkie_base"
 )
 
+# Same pattern for the other backends. Stubs today; real values picked up
+# by load_backend() once the nanochat/qwen modules are implemented.
+NANOCHAT_WEIGHTS_DIR = Path(
+    os.environ.get("NANOCHAT_WEIGHTS_DIR") or DATA_ROOT / "models" / "nanochat_base"
+)
+QWEN_WEIGHTS_DIR = Path(
+    os.environ.get("QWEN_WEIGHTS_DIR") or DATA_ROOT / "models" / "qwen_base"
+)
+
 # Base model is assumed trained on data <= BASE_CUTOFF_YEAR.
 # Year-models are built cumulatively: base -> +1931 -> +1932 -> ...
 BASE_CUTOFF_YEAR = 1930

@@ -29,7 +29,7 @@ if str(_HERE.parent) not in sys.path:
     sys.path.insert(0, str(_HERE.parent))
 
 from policy_pred import config, evaluators  # noqa: E402
-from policy_pred.talkie import TalkieBackend  # noqa: E402
+from policy_pred.backends import load_backend  # noqa: E402
 from policy_pred.corpus import experiment_dir, load_experiment  # noqa: E402
 
 
@@ -65,10 +65,12 @@ def main() -> None:
         print(f"eval.json exists at {out_path} (--force to overwrite)")
         return
 
-    # Load backend.
-    print(f"Loading Talkie from {config.TALKIE_WEIGHTS_DIR}...")
-    backend = TalkieBackend(config.TALKIE_WEIGHTS_DIR)
+    # Load backend (dispatcher reads cfg.model_type; defaults to talkie).
+    model_type = (cfg.get("model_type") or "talkie").lower()
+    backend = load_backend(cfg)
+    print(f"Loading {model_type} from {backend.weights_dir}...")
     backend._ensure_loaded()
+    backend.prepare_for_peft()  # backend-specific shims (no-op for HF models)
 
     # Apply adapter if available and not suppressed. --adapter overrides
     # the default name-based lookup; useful when two eval YAMLs share one
@@ -83,12 +85,6 @@ def main() -> None:
     if adapter_dir is not None and adapter_dir.exists():
         print(f"Applying adapter {adapter_dir}...")
         from peft import PeftModel
-        # peft >=0.10 calls model.config.get("tie_word_embeddings") inside
-        # inject_adapter. Talkie's GPTConfig is a plain dataclass-like object
-        # without .get(), so shim it before peft touches it.
-        _model_cfg = getattr(backend._model, "config", None)
-        if _model_cfg is not None and not hasattr(_model_cfg, "get"):
-            _model_cfg.get = lambda k, default=None: getattr(_model_cfg, k, default)
         backend._model = PeftModel.from_pretrained(backend._model, str(adapter_dir))
         backend._model.eval()
         adapter_label = str(adapter_dir)
@@ -117,7 +113,8 @@ def main() -> None:
         "experiment": name,
         "evaluator": evaluator_name,
         "adapter": adapter_label,
-        "talkie_weights_dir": str(config.TALKIE_WEIGHTS_DIR),
+        "model_type": model_type,
+        "weights_dir": str(backend.weights_dir),
         "elapsed_sec": elapsed,
         "results": results,
     }

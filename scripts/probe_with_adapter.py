@@ -25,7 +25,7 @@ _REPO = _HERE.parent
 sys.path.insert(0, str(_REPO.parent))
 
 from policy_pred import config  # noqa: E402
-from policy_pred.talkie import TalkieBackend  # noqa: E402
+from policy_pred.backends.talkie import TalkieBackend  # noqa: E402
 
 
 PROBES = [
