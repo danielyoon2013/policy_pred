@@ -14,10 +14,13 @@ TALKIE_WEIGHTS_DIR = Path(
     os.environ.get("TALKIE_WEIGHTS_DIR") or DATA_ROOT / "models" / "talkie_base"
 )
 
-# Same pattern for the other backends. Stubs today; real values picked up
-# by load_backend() once the nanochat/qwen modules are implemented.
+# Nanochat-1900-1949 base model. The default points at the trained
+# checkpoint in the hist_LLM tree on the local Windows box; override
+# via NANOCHAT_WEIGHTS_DIR on remote pods. The dir must contain
+# tokenizer/ + base_checkpoints/d<depth>/ (nanochat's convention).
 NANOCHAT_WEIGHTS_DIR = Path(
-    os.environ.get("NANOCHAT_WEIGHTS_DIR") or DATA_ROOT / "models" / "nanochat_base"
+    os.environ.get("NANOCHAT_WEIGHTS_DIR")
+    or "D:/hist_LLM/periods/1900_1949/model"
 )
 QWEN_WEIGHTS_DIR = Path(
     os.environ.get("QWEN_WEIGHTS_DIR") or DATA_ROOT / "models" / "qwen_base"
