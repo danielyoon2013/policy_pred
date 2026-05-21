@@ -21,5 +21,5 @@ train:
 
 eval:
   evaluator: gsm_mc
-  test_set: D:/hist_LLM/eval_data/gsm_mc.jsonl
+  test_set: data_links/eval/gsm_mc.jsonl
   n_samples: null

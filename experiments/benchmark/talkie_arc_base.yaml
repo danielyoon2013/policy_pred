@@ -8,5 +8,5 @@ model_type: talkie
 
 eval:
   evaluator: arc_mc
-  test_set: D:/hist_LLM/eval_data/arc_challenge_test.jsonl
+  test_set: data_links/eval/arc_challenge_test.jsonl
   n_samples: null
