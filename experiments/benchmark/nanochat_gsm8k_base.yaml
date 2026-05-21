@@ -1,0 +1,11 @@
+# Base-only control: nanochat with NO LoRA adapter -> GSM8K MC eval.
+#
+# Usage:
+#   python eval.py --experiment experiments/benchmark/nanochat_gsm8k_base.yaml --no-adapter
+name: benchmark_nanochat_gsm8k_base
+model_type: nanochat
+
+eval:
+  evaluator: gsm_mc
+  test_set: D:/hist_LLM/eval_data/gsm_mc.jsonl
+  n_samples: null

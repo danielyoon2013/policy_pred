@@ -1,0 +1,12 @@
+# Base-only control: Talkie with NO LoRA adapter -> ARC-Challenge eval.
+# Establishes the chance/baseline number we compare the SFT adapter against.
+#
+# Usage:
+#   python eval.py --experiment experiments/benchmark/talkie_arc_base.yaml --no-adapter
+name: benchmark_talkie_arc_base
+model_type: talkie
+
+eval:
+  evaluator: arc_mc
+  test_set: D:/hist_LLM/eval_data/arc_challenge_test.jsonl
+  n_samples: null

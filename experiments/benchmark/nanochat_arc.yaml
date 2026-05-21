@@ -1,0 +1,28 @@
+# Benchmark cell: nanochat base + LoRA-SFT on Gen A -> ARC-Challenge eval.
+#
+# Same shape as talkie_arc.yaml — only model_type differs. Routes to
+# NanochatBackend via the dispatcher; train.py uses
+# backend.LORA_TARGET_MODULES = ["c_q", "c_k", "c_v", "c_proj", "c_fc"]
+# instead of Talkie's attn_*/mlp_* names.
+#
+# Usage:
+#   accelerate launch --num_processes=4 --mixed_precision=no \
+#       train.py --experiment experiments/benchmark/nanochat_arc.yaml --sft
+#   python eval.py --experiment experiments/benchmark/nanochat_arc.yaml
+name: benchmark_nanochat_arc
+model_type: nanochat
+
+train:
+  data: data_links/benchmarks/arc_train.jsonl
+  method: lora
+  rank: 32
+  lora_alpha: 64
+  epochs: 1
+  lr: 1.0e-4
+  batch_size: 8
+  seq_len: 2048
+
+eval:
+  evaluator: arc_mc
+  test_set: D:/hist_LLM/eval_data/arc_challenge_test.jsonl
+  n_samples: null

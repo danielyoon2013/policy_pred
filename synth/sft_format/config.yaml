@@ -1,0 +1,30 @@
+# synth/sft_format default config.
+# Override any field via CLI flags (see `python run.py --help`).
+
+# Output JSONL — one {"messages": [user, assistant], "metadata": {...}}
+# record per generated SFT pair. The downstream train.py `--sft` mode
+# reads this format directly.
+out: ./out/sft_format.jsonl
+
+# How many pairs of each class. Plan target: 5K yes/no + 5K likert = 10K total.
+# Balance enforced post-generation by trim_to_counts:
+#   yes/no  -> exactly half "Yes", half "No"
+#   likert  -> exactly 1/5 each across 5 options
+n_yesno: 5000
+n_likert: 5000
+
+# Per OpenAI call. 10 pairs per call gives ~1000 calls for the full run.
+# Drop to 5 if gpt-4o-mini occasionally returns under-spec batches.
+batch_size: 10
+
+# OpenAI model + sampling. Higher temperature = more topic diversity.
+model: gpt-4o-mini
+temperature: 0.9
+max_tokens: 2048
+
+# Concurrent API calls. 16 stays well under gpt-4o-mini tier-2 RPM
+# (5000/min) so we don't hit rate limits.
+max_workers: 16
+
+# Deterministic ordering for the random shuffle at write time.
+seed: 42

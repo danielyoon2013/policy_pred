@@ -1,0 +1,28 @@
+# Benchmark cell: Talkie base + LoRA-SFT on Gen C (comprehension) -> GSM8K eval.
+#
+# Train data: hist_llm Generator C reading-comprehension synth.
+# Eval set:   hist_llm pre-baked GSM8K MC-4 test split (fast probe via
+#             score_continuations; the slower open-ended path is also
+#             available via the gsm8k evaluator).
+#
+# Usage:
+#   accelerate launch --num_processes=4 --mixed_precision=no \
+#       train.py --experiment experiments/benchmark/talkie_gsm8k.yaml --sft
+#   python eval.py --experiment experiments/benchmark/talkie_gsm8k.yaml
+name: benchmark_talkie_gsm8k
+model_type: talkie
+
+train:
+  data: data_links/benchmarks/gsm8k_train.jsonl
+  method: lora
+  rank: 32
+  lora_alpha: 64
+  epochs: 1
+  lr: 1.0e-4
+  batch_size: 8
+  seq_len: 2048
+
+eval:
+  evaluator: gsm_mc
+  test_set: D:/hist_LLM/eval_data/gsm_mc.jsonl
+  n_samples: null

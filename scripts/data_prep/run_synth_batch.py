@@ -44,7 +44,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent.parent
-SYNTH_NAIVE_ROOT = REPO_ROOT / "synth_naive"
+SYNTH_NAIVE_ROOT = REPO_ROOT / "synth" / "naive"
 SYSTEM_PROMPT = (SYNTH_NAIVE_ROOT / "prompts" / "system.md").read_text(encoding="utf-8")
 USER_TEMPLATE = (SYNTH_NAIVE_ROOT / "prompts" / "user.md").read_text(encoding="utf-8")
 

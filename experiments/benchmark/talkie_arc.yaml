@@ -1,0 +1,30 @@
+# Benchmark cell: Talkie base + LoRA-SFT on Gen A (factual QA) -> ARC-Challenge eval.
+#
+# Tests whether LoRA-SFT meaningfully shifts ARC scores over the
+# base-only baseline (see talkie_arc_base.yaml). If it does, the
+# training pipeline is validated and we can trust the policy results.
+#
+# Train data: hist_llm Generator A factual QA, ARC-style MC-4.
+# Eval set:   hist_llm pre-baked ARC-Challenge test split.
+#
+# Usage:
+#   accelerate launch --num_processes=4 --mixed_precision=no \
+#       train.py --experiment experiments/benchmark/talkie_arc.yaml --sft
+#   python eval.py --experiment experiments/benchmark/talkie_arc.yaml
+name: benchmark_talkie_arc
+model_type: talkie
+
+train:
+  data: data_links/benchmarks/arc_train.jsonl
+  method: lora
+  rank: 32
+  lora_alpha: 64
+  epochs: 1
+  lr: 1.0e-4
+  batch_size: 8
+  seq_len: 2048
+
+eval:
+  evaluator: arc_mc
+  test_set: D:/hist_LLM/eval_data/arc_challenge_test.jsonl
+  n_samples: null

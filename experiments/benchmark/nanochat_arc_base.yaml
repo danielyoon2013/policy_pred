@@ -1,0 +1,11 @@
+# Base-only control: nanochat with NO LoRA adapter -> ARC-Challenge eval.
+#
+# Usage:
+#   python eval.py --experiment experiments/benchmark/nanochat_arc_base.yaml --no-adapter
+name: benchmark_nanochat_arc_base
+model_type: nanochat
+
+eval:
+  evaluator: arc_mc
+  test_set: D:/hist_LLM/eval_data/arc_challenge_test.jsonl
+  n_samples: null

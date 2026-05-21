@@ -32,8 +32,7 @@ dist/
 *.log
 
 # Output dirs from synth packages (runtime artifacts; bundled examples are in examples/)
-synth_naive/out/
-synth_2step/out/
+synth/*/out/
 
 # Notebooks (uncomment if undesired)
 # *.ipynb

@@ -1,0 +1,25 @@
+# Benchmark cell: nanochat base + LoRA-SFT on Gen C -> GSM8K eval.
+#
+# Same as talkie_gsm8k.yaml but routes to NanochatBackend.
+#
+# Usage:
+#   accelerate launch --num_processes=4 --mixed_precision=no \
+#       train.py --experiment experiments/benchmark/nanochat_gsm8k.yaml --sft
+#   python eval.py --experiment experiments/benchmark/nanochat_gsm8k.yaml
+name: benchmark_nanochat_gsm8k
+model_type: nanochat
+
+train:
+  data: data_links/benchmarks/gsm8k_train.jsonl
+  method: lora
+  rank: 32
+  lora_alpha: 64
+  epochs: 1
+  lr: 1.0e-4
+  batch_size: 8
+  seq_len: 2048
+
+eval:
+  evaluator: gsm_mc
+  test_set: D:/hist_LLM/eval_data/gsm_mc.jsonl
+  n_samples: null
