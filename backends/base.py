@@ -72,3 +72,22 @@ class Backend(Protocol):
         token so train.py's document packer doesn't need to know which.
         """
         ...
+
+    def forward_for_training(
+        self, model, input_ids: torch.Tensor, use_grad_ckpt: bool = False
+    ) -> torch.Tensor:
+        """Run a [B, T] -> [B, T, V] forward suitable for the train loop.
+
+        `model` is the possibly-wrapped peft+DDP model. Each backend knows
+        how to reach into the base model's actual forward and optionally
+        wrap each transformer block in torch.utils.checkpoint.checkpoint
+        for activation memory savings.
+
+        Backends differ on what's needed:
+        - Talkie's vendored TalkieModel.forward returns logits sliced to
+          the last token only; we re-implement a full-sequence forward
+          here that reaches into model.embed/blocks/lm_head.
+        - Nanochat's GPT.forward already returns full-sequence logits, so
+          its implementation can just call model(input_ids).
+        """
+        ...

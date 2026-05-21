@@ -139,6 +139,39 @@ class TalkieBackend:
         self._ensure_loaded()
         return self._tokenizer.encode("<|endoftext|>", allowed_special="all")[0]
 
+    def forward_for_training(
+        self, model, input_ids: torch.Tensor, use_grad_ckpt: bool = False
+    ) -> torch.Tensor:
+        """Training forward returning [B, T, V] logits, with optional
+        per-block gradient checkpointing.
+
+        Mirrors the vendored TalkieModel.forward (talkie_vendor/src/talkie/
+        model.py:184-196) but drops the last-token slice on the lm_head
+        projection so every position gets a logit vector (needed for
+        next-token loss). Works on a bare TalkieModel, a PEFT-wrapped one
+        (PEFT proxies attribute access), or a DDP-wrapped one (DDP does
+        NOT proxy attribute access, so we unwrap here). Gradient sync
+        still fires on backward() because DDP's reducer hooks are attached
+        to the parameters, not the forward path.
+        """
+        if hasattr(model, "module") and not hasattr(model, "cos"):
+            model = model.module
+        _, seq_len = input_ids.shape
+        cos_sin = model.cos[:, :seq_len], model.sin[:, :seq_len]
+
+        x = model.embed(input_ids)
+        x = F.rms_norm(x, (x.shape[-1],))
+        e_x = x
+        for block in model.blocks:
+            if use_grad_ckpt:
+                x = torch.utils.checkpoint.checkpoint(
+                    block, e_x, x, cos_sin, use_reentrant=False
+                )
+            else:
+                x = block(e_x, x, cos_sin)
+        x = F.rms_norm(x, (x.shape[-1],))
+        return F.linear(x, model.lm_head_gain(model.lm_head)).float()
+
     def _forward_all_positions(self, input_ids: torch.Tensor) -> torch.Tensor:
         """Forward returning [B, T, V] logits.
 

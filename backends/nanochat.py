@@ -126,6 +126,27 @@ class NanochatBackend:
         self._ensure_loaded()
         return self._tokenizer.encode_special("<|bos|>")
 
+    def forward_for_training(
+        self, model, input_ids: torch.Tensor, use_grad_ckpt: bool = False
+    ) -> torch.Tensor:
+        """Training forward returning [B, T, V] logits.
+
+        Nanochat's GPT.forward (vendor/nanochat/gpt.py) already returns
+        full-sequence logits, so we just call the model directly through
+        any PEFT/DDP wrappers (both proxy __call__ correctly).
+
+        Gradient checkpointing isn't wired here because nanochat's blocks
+        take a 5-tuple of (x, ve, cos_sin, window_size, kv_cache) which
+        doesn't trivially fit torch.utils.checkpoint.checkpoint's
+        positional-args API. The 1.36B model fits a per-rank batch of 2
+        comfortably on H100 80GB without it, so we skip it for now.
+        """
+        if use_grad_ckpt:
+            # Not implemented for nanochat — silently ignore the flag.
+            # The model is small enough to run without it.
+            pass
+        return model(input_ids)
+
     @torch.no_grad()
     def score_continuations(
         self, prompt: str, continuations: Sequence[str]

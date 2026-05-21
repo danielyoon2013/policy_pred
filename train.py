@@ -217,31 +217,10 @@ def pack_tokens_and_labels(
     )
 
 
-def forward_all_positions(model, input_ids: torch.Tensor, use_grad_ckpt: bool) -> torch.Tensor:
-    """[B, T, V] forward. Same body as TalkieBackend._forward_all_positions but
-    optionally gradient-checkpoints each transformer block. Works on a bare
-    TalkieModel, a PEFT-wrapped one (PEFT proxies attribute access), or a
-    DDP-wrapped one (DDP does NOT proxy attribute access, so we unwrap here).
-    Gradient sync still fires on backward() because DDP's reducer hooks are
-    attached to the parameters, not the forward path.
-    """
-    if hasattr(model, "module") and not hasattr(model, "cos"):
-        model = model.module
-    _, seq_len = input_ids.shape
-    cos_sin = model.cos[:, :seq_len], model.sin[:, :seq_len]
-
-    x = model.embed(input_ids)
-    x = F.rms_norm(x, (x.shape[-1],))
-    e_x = x
-    for block in model.blocks:
-        if use_grad_ckpt:
-            x = torch.utils.checkpoint.checkpoint(
-                block, e_x, x, cos_sin, use_reentrant=False
-            )
-        else:
-            x = block(e_x, x, cos_sin)
-    x = F.rms_norm(x, (x.shape[-1],))
-    return F.linear(x, model.lm_head_gain(model.lm_head)).float()
+# forward_all_positions used to live here as a Talkie-specific helper. It's
+# now backend-owned (backends/<name>.py:forward_for_training) so different
+# base models can implement the training forward + gradient checkpointing
+# their own way. train.py just calls backend.forward_for_training(...).
 
 
 def lr_at_step(step: int, total: int, warmup: int, peak: float) -> float:
@@ -463,7 +442,9 @@ def main() -> None:
             # TensorDataset wraps in tuple; accelerator.prepare moves to device.
             input_ids, labels = batch_tuple
 
-            logits = forward_all_positions(peft_model, input_ids, use_grad_ckpt=use_ckpt)
+            logits = backend.forward_for_training(
+                peft_model, input_ids, use_grad_ckpt=use_ckpt
+            )
 
             # Standard next-token shift. labels carries -100 on masked
             # (prompt) positions when --sft is on; otherwise labels == input_ids.
