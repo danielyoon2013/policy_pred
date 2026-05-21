@@ -361,7 +361,7 @@ def main() -> None:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
     print()
-    print(f"Wrote {len(all_records)} records → {out_path}")
+    print(f"Wrote {len(all_records)} records -> {out_path}")
     # Quick sanity print: count by target_label
     counts: dict[str, int] = {}
     for r in all_records:
