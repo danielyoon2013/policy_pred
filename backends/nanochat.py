@@ -109,6 +109,23 @@ class NanochatBackend:
         if not hasattr(cls, "__contains__"):
             cls.__contains__ = lambda self, k: hasattr(self, k)
 
+    def tokenize(self, text: str) -> list[int]:
+        """Encode text to token IDs. Nanochat's RustBPETokenizer wraps
+        tiktoken with its own signature (no `allowed_special` kwarg) — it
+        uses `encode_ordinary` for the text and exposes encode_special()
+        for individual special tokens.
+        """
+        self._ensure_loaded()
+        return self._tokenizer.encode(text)
+
+    @property
+    def eos_id(self) -> int:
+        """Nanochat doesn't define <|endoftext|>; <|bos|> is its
+        document-boundary token (see SPECIAL_TOKENS in vendor tokenizer.py).
+        """
+        self._ensure_loaded()
+        return self._tokenizer.encode_special("<|bos|>")
+
     @torch.no_grad()
     def score_continuations(
         self, prompt: str, continuations: Sequence[str]

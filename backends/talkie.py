@@ -125,6 +125,20 @@ class TalkieBackend:
         if not hasattr(cls, "__contains__"):
             cls.__contains__ = lambda self, k: hasattr(self, k)
 
+    def tokenize(self, text: str) -> list[int]:
+        """Encode text to token IDs. Talkie's tokenizer is a raw tiktoken
+        Encoding, so we forward `allowed_special="all"` to let <|endoftext|>
+        and other specials encode as their special-token ids.
+        """
+        self._ensure_loaded()
+        return self._tokenizer.encode(text, allowed_special="all")
+
+    @property
+    def eos_id(self) -> int:
+        """<|endoftext|>'s token id under Talkie's vocab."""
+        self._ensure_loaded()
+        return self._tokenizer.encode("<|endoftext|>", allowed_special="all")[0]
+
     def _forward_all_positions(self, input_ids: torch.Tensor) -> torch.Tensor:
         """Forward returning [B, T, V] logits.
 

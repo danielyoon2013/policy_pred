@@ -345,7 +345,7 @@ def main() -> None:
     mp(f"  {len(docs):,} documents")
 
     mp("Tokenizing...")
-    eos_id = tokenizer.encode("<|endoftext|>", allowed_special="all")[0]
+    eos_id = backend.eos_id
     token_lists: list[list[int]] = []
     label_lists: list[list[int]] = []
     n_chat_records_masked = 0
@@ -353,10 +353,10 @@ def main() -> None:
         # Tokenize prompt and response separately so BPE merges don't cross
         # the boundary; concatenated token IDs are what the model trains on.
         if prompt_str:
-            prompt_ids = tokenizer.encode(prompt_str, allowed_special="all")
+            prompt_ids = backend.tokenize(prompt_str)
         else:
             prompt_ids = []
-        response_ids = tokenizer.encode(response_str, allowed_special="all")
+        response_ids = backend.tokenize(response_str)
         ids = prompt_ids + response_ids
 
         if args.sft and prompt_ids:

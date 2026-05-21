@@ -50,3 +50,25 @@ class Backend(Protocol):
         GPTConfig) override this to make their config look dict-like.
         """
         ...
+
+    def tokenize(self, text: str) -> list[int]:
+        """Encode `text` to token IDs using the backend's tokenizer.
+
+        Backend-agnostic wrapper around the tokenizer's `encode`. Different
+        backends use tokenizers with different APIs:
+        - Talkie's is a tiktoken.Encoding directly (takes `allowed_special`)
+        - Nanochat wraps tiktoken in RustBPETokenizer (different signature)
+        Each backend implements this method to call its own tokenizer
+        correctly.
+        """
+        ...
+
+    @property
+    def eos_id(self) -> int:
+        """The token id used to mark document boundaries during training.
+
+        Talkie uses <|endoftext|>; nanochat uses <|bos|> (no <|endoftext|>
+        defined). Each backend exposes its own canonical end-of-document
+        token so train.py's document packer doesn't need to know which.
+        """
+        ...
