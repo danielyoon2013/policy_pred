@@ -1,0 +1,35 @@
+# Benchmark experiment: nanochat + LoRA r=32 + ALL-GENERATORS mix -> ARC.
+#
+# Data: gens A, B, D, E, F (all formats — mc4, cot, mc2, open).
+# Skipped C (reading-comprehension passages, ~700MB and ARC-misaligned) and
+# G (rephrasing, not benchmark-relevant). Total ~824K records.
+#
+# Hypothesis: a broader pretraining-like mix gives the LoRA more diverse
+# (prompt, response) pairs to learn from, and the volume (~12x more
+# records than the original 69K MC4-only run) might overcome the
+# format-fragmentation seen at r=32.
+#
+# Wall time: ~1.5-2 hr on 4x H100. With --sft (assistant-only loss).
+#
+# Usage (run via scripts/pod/run_arc_allgens.sh):
+#   accelerate launch --num_processes=4 --mixed_precision=no \
+#       train.py --experiment experiments/benchmark/nanochat_arc_allgens.yaml \
+#                --batch-size 2 --sft
+#   python eval.py --experiment experiments/benchmark/nanochat_arc_allgens.yaml --force
+name: benchmark_nanochat_arc_allgens
+model_type: nanochat
+
+train:
+  data: data_links/benchmarks/arc_train_allgens.jsonl
+  method: lora
+  rank: 32
+  lora_alpha: 64
+  epochs: 1
+  lr: 1.0e-4
+  batch_size: 8
+  seq_len: 2048
+
+eval:
+  evaluator: arc_mc
+  test_set: data_links/eval/arc_challenge_test.jsonl
+  n_samples: null
