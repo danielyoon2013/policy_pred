@@ -1,0 +1,30 @@
+# Benchmark experiment: nanochat + LoRA r=128 + ALL-GENERATORS mix -> ARC.
+#
+# Variant of nanochat_arc_allgens.yaml with 4x more LoRA capacity (r=128
+# instead of r=32). Tests whether the lift we saw with diverse data
+# (allgens r=32: 0.2832, +2.0 over base) goes further with more capacity.
+#
+# Hypothesis: now that we know data diversity gives signal, capacity may
+# stop being the bottleneck — or it may add another 1-2 points.
+#
+# Adapter size: ~100 MB (vs ~25 MB at r=32). Negligible disk impact.
+#
+# Wall time: ~1.5-2.5 hr on 4x H100 (slightly longer than r=32 due to
+# bigger LoRA matrices but same #steps over the same 824K records).
+name: benchmark_nanochat_arc_allgens_r128
+model_type: nanochat
+
+train:
+  data: data_links/benchmarks/arc_train_allgens.jsonl
+  method: lora
+  rank: 128
+  lora_alpha: 256
+  epochs: 1
+  lr: 1.0e-4
+  batch_size: 8
+  seq_len: 2048
+
+eval:
+  evaluator: arc_mc
+  test_set: data_links/eval/arc_challenge_test.jsonl
+  n_samples: null
