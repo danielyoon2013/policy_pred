@@ -1,0 +1,34 @@
+# Benchmark cell variant: Talkie + LoRA r=128 + CoT+MC4 mix -> ARC.
+#
+# Capacity experiment. Hypothesis: r=32 LoRA had too little capacity to
+# keep the bare-question->CoT and MC-shaped->letter conditionals
+# separated; with r=128 (~4x more trainable params, ~5% of Talkie's
+# total), the two routings can be learned independently — matching what
+# hist_llm got via full-FT.
+#
+# Training data: data_links/benchmarks/arc_train.jsonl (the CoT+MC4 mix
+# bundle — must be the 138K-record mixed version, not MC4-only).
+#
+# Adapter size estimate: ~800 MB on disk (vs ~500 MB at r=32).
+#
+# Usage:
+#   accelerate launch --num_processes=4 --mixed_precision=no \
+#       train.py --experiment experiments/benchmark/talkie_arc_r128.yaml --sft
+#   python eval.py --experiment experiments/benchmark/talkie_arc_r128.yaml
+name: benchmark_talkie_arc_r128
+model_type: talkie
+
+train:
+  data: data_links/benchmarks/arc_train.jsonl
+  method: lora
+  rank: 128
+  lora_alpha: 256
+  epochs: 1
+  lr: 1.0e-4
+  batch_size: 8
+  seq_len: 2048
+
+eval:
+  evaluator: arc_mc
+  test_set: data_links/eval/arc_challenge_test.jsonl
+  n_samples: null

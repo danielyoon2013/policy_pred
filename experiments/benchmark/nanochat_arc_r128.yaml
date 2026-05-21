@@ -1,0 +1,26 @@
+# Benchmark cell variant: nanochat + LoRA r=128 + CoT+MC4 mix -> ARC.
+#
+# Same hypothesis as talkie_arc_r128.yaml. With nanochat (1.36B params)
+# the r=128 adapter is small (~100 MB) so disk pressure is negligible.
+#
+# Usage:
+#   accelerate launch --num_processes=4 --mixed_precision=no \
+#       train.py --experiment experiments/benchmark/nanochat_arc_r128.yaml --sft
+#   python eval.py --experiment experiments/benchmark/nanochat_arc_r128.yaml
+name: benchmark_nanochat_arc_r128
+model_type: nanochat
+
+train:
+  data: data_links/benchmarks/arc_train.jsonl
+  method: lora
+  rank: 128
+  lora_alpha: 256
+  epochs: 1
+  lr: 1.0e-4
+  batch_size: 8
+  seq_len: 2048
+
+eval:
+  evaluator: arc_mc
+  test_set: data_links/eval/arc_challenge_test.jsonl
+  n_samples: null
