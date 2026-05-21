@@ -81,6 +81,15 @@ class NanochatBackend:
         # when peft attaches a trainable adapter on top.
         from nanochat.checkpoint_manager import load_model
         model, tokenizer, _meta = load_model("base", self._device, phase="eval")
+        # Nanochat hardcodes its rotary cos/sin buffers as bf16 (gpt.py
+        # asserts this in forward), but on CUDA the loaded state_dict
+        # weights may stay as fp32 — causing a dtype mismatch in c_q/c_k
+        # at the first linear op. Cast the whole model to bf16 so
+        # weights + activations + cos/sin all agree. (On CPU, load_model
+        # has already converted to float32 for stability, and we don't
+        # want to break that path — only cast on CUDA.)
+        if self._device.type == "cuda":
+            model = model.to(torch.bfloat16)
         self._model = model
         self._tokenizer = tokenizer
 
