@@ -1,0 +1,10 @@
+# Eval-only: take the talkie_full_allgens adapter and score it on RACE.
+# Use with --adapter pointing at talkie_full_allgens/checkpoint.
+name: benchmark_talkie_full_allgens_race
+model_type: talkie
+
+eval:
+  evaluator: race_mc
+  test_set: data_links/eval/race_test.jsonl
+  subset_filter: all
+  n_samples: null

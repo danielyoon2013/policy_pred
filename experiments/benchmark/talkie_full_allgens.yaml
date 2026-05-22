@@ -1,0 +1,24 @@
+# Train Talkie + LoRA r=32 on ALL synthetic generators (A through G,
+# all formats). Same recipe as nanochat_full_allgens.yaml, model_type swap.
+# Eval against ARC-Challenge.
+#
+# To also eval the trained adapter on RACE, run:
+#   python eval.py --experiment experiments/benchmark/talkie_full_allgens_race.yaml \
+#       --adapter $POLICY_PRED_DATA_ROOT/experiments/benchmark_talkie_full_allgens/checkpoint
+name: benchmark_talkie_full_allgens
+model_type: talkie
+
+train:
+  data: data_links/benchmarks/train_full_allgens.jsonl
+  method: lora
+  rank: 32
+  lora_alpha: 64
+  epochs: 1
+  lr: 1.0e-4
+  batch_size: 8
+  seq_len: 2048
+
+eval:
+  evaluator: arc_mc
+  test_set: data_links/eval/arc_challenge_test.jsonl
+  n_samples: null

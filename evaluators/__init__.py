@@ -24,6 +24,7 @@ REGISTRY = {
     "gsm_mc": "gsm_mc",                  # multi-choice math (fast, 4 score_continuations per problem)
     "gsm8k": "gsm8k",                    # open-ended math (generate + parse final number; slow)
     "arc_mc": "arc_mc",                  # multi-choice science reasoning (1144 items, ARC-Challenge)
+    "race_mc": "race_mc",                # reading comprehension (RACE-Middle 360 + RACE-High 880)
     "policy_probe": "policy_probe",      # V1 yes/no probe (catalog.yaml only)
     "policy_battery": "policy_battery",  # yes_no + likert5, catalog OR csv (211 events), no year in prompt
     "policy_battery_variants": "policy_battery_variants",  # variant-aware: mean+std over N paraphrases
