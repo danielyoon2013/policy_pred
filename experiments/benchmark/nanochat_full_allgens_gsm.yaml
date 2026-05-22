@@ -1,0 +1,9 @@
+# Eval-only: take the nanochat_full_allgens adapter and score it on GSM8K-MC.
+# Use with --adapter pointing at benchmark_nanochat_full_allgens/checkpoint.
+name: benchmark_nanochat_full_allgens_gsm
+model_type: nanochat
+
+eval:
+  evaluator: gsm_mc
+  test_set: data_links/eval/gsm_mc.jsonl
+  n_samples: null
