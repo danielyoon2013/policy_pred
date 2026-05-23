@@ -17,13 +17,18 @@
 # CPT-only eval.json files locally in chain_evals.tgz, so no info loss.
 #
 # Usage:
-#   bash scripts/pod/train_policy_sft_on_top.sh                 # default 1931..2020
-#   bash scripts/pod/train_policy_sft_on_top.sh 1935 1935       # smoke test one year
-#   bash scripts/pod/train_policy_sft_on_top.sh 1936 1945       # subrange
-#   KEEP_CPT=1 bash scripts/pod/train_policy_sft_on_top.sh ...  # don't delete CPT after SFT
+#   bash scripts/pod/train_policy_sft_on_top.sh                          # talkie, all years
+#   bash scripts/pod/train_policy_sft_on_top.sh 1935 1935                # talkie smoke
+#   VARIANT=nanochat bash scripts/pod/train_policy_sft_on_top.sh         # nanochat chain
+#   VARIANT=nanochat bash scripts/pod/train_policy_sft_on_top.sh 1935 1935  # nanochat smoke
+#   KEEP_CPT=1 bash scripts/pod/train_policy_sft_on_top.sh ...           # don't delete CPT
 #
-# Per-year wall time on 4x H100: ~5-7 min (10K records, ~250 steps).
-# Full 90 years: ~10-11 hr. Idempotent (skips years whose SFT adapter exists).
+# VARIANT picks which CPT chain to SFT-on-top. Empty = talkie (CPT path
+# policy_<Y>_naive); "nanochat" = nanochat (CPT path policy_<Y>_naive_nanochat).
+# SFT outputs land at policy_<Y>_naive[_${VARIANT}]_sft.
+#
+# Per-year wall time on 4x H100: ~5-7 min talkie / ~2-3 min nanochat.
+# Full 90 years: ~10-11 hr talkie / ~3-5 hr nanochat. Idempotent.
 #
 set -uo pipefail   # NOT -e — let per-year failures pass so the rest of the chain proceeds
 
@@ -31,6 +36,8 @@ START_YEAR="${1:-1931}"
 END_YEAR="${2:-2020}"
 SFT_DATA="${SFT_DATA:-data_links/sft/format_sft.jsonl}"
 KEEP_CPT="${KEEP_CPT:-0}"
+VARIANT="${VARIANT:-}"                  # "" = talkie, "nanochat" = nanochat chain
+SUFFIX="${VARIANT:+_${VARIANT}}"        # "" or "_nanochat"
 
 NUM_PROCESSES="${NUM_PROCESSES:-$(nvidia-smi -L 2>/dev/null | wc -l)}"
 if [[ -z "$NUM_PROCESSES" || "$NUM_PROCESSES" -lt 1 ]]; then NUM_PROCESSES=4; fi
@@ -45,6 +52,7 @@ echo "============================================================="
 echo "  Pod runbook: policy SFT-on-top chain"
 echo "============================================================="
 echo "  Year range:    ${START_YEAR}..${END_YEAR}"
+echo "  Variant:       ${VARIANT:-talkie (default)}"
 echo "  SFT data:      ${SFT_DATA}"
 echo "  GPUs:          ${NUM_PROCESSES}"
 echo "  Data root:     $POLICY_PRED_DATA_ROOT"
@@ -74,13 +82,15 @@ n_failed=0
 n_cpt_deleted=0
 
 for y in $(seq "$START_YEAR" "$END_YEAR"); do
-    cpt_dir="${EXPS_DIR}/policy_${y}_naive/checkpoint"
-    sft_dir="${EXPS_DIR}/policy_${y}_naive_sft/checkpoint"
-    cpt_yaml="experiments/policy_${y}_naive.yaml"
-    sft_yaml="experiments/policy_${y}_naive_sft.yaml"
+    base_name="policy_${y}_naive${SUFFIX}"
+    sft_name="${base_name}_sft"
+    cpt_dir="${EXPS_DIR}/${base_name}/checkpoint"
+    sft_dir="${EXPS_DIR}/${sft_name}/checkpoint"
+    cpt_yaml="experiments/${base_name}.yaml"
+    sft_yaml="experiments/${sft_name}.yaml"
 
     echo "============================================================"
-    echo "  YEAR $y  (SFT-on-top of CPT adapter)"
+    echo "  YEAR $y  (SFT-on-top of ${base_name} CPT adapter)"
     echo "============================================================"
 
     # Idempotent skip.
@@ -90,7 +100,7 @@ for y in $(seq "$START_YEAR" "$END_YEAR"); do
         # If SFT is done but CPT lingers from a prior run, clean up now.
         if [[ "$KEEP_CPT" != "1" ]] && [[ -f "$cpt_dir/adapter_config.json" ]]; then
             echo "  cleanup: deleting stale CPT-only adapter at $cpt_dir"
-            rm -rf "${EXPS_DIR}/policy_${y}_naive/checkpoint"
+            rm -rf "${EXPS_DIR}/${base_name}/checkpoint"
             n_cpt_deleted=$((n_cpt_deleted + 1))
         fi
         continue
@@ -99,7 +109,7 @@ for y in $(seq "$START_YEAR" "$END_YEAR"); do
     # CPT adapter must exist (--init-from source).
     if [[ ! -f "$cpt_dir/adapter_config.json" ]]; then
         echo "  ERROR: CPT-only adapter missing at $cpt_dir"
-        echo "         Phase 4 SFT-on-top requires the 90 CPT adapters from Phase 1-2."
+        echo "         SFT-on-top requires the ${base_name} CPT adapter."
         n_failed=$((n_failed + 1))
         continue
     fi
@@ -112,8 +122,8 @@ for y in $(seq "$START_YEAR" "$END_YEAR"); do
     fi
 
     # Generate the SFT YAML if missing — clone of the CPT YAML with
-    # name renamed to policy_<Y>_naive_sft so train.py/eval.py auto-route
-    # outputs to a separate experiment directory.
+    # `name:` renamed so train.py/eval.py auto-route outputs to a
+    # separate experiment directory. model_type (if present) carries over.
     if [[ ! -f "$sft_yaml" ]]; then
         echo "  generating $sft_yaml"
         python3 - <<PYEOF
@@ -121,7 +131,7 @@ from pathlib import Path
 src = Path("${cpt_yaml}")
 dst = Path("${sft_yaml}")
 text = src.read_text(encoding="utf-8")
-text = text.replace("name: policy_${y}_naive", "name: policy_${y}_naive_sft", 1)
+text = text.replace("name: ${base_name}", "name: ${sft_name}", 1)
 dst.write_text(text, encoding="utf-8")
 PYEOF
     fi
@@ -149,7 +159,7 @@ PYEOF
             # Disk: drop the CPT-only adapter now that the SFT version is saved.
             if [[ "$KEEP_CPT" != "1" ]]; then
                 echo "  deleting CPT-only adapter at $cpt_dir to free disk"
-                rm -rf "${EXPS_DIR}/policy_${y}_naive/checkpoint"
+                rm -rf "${EXPS_DIR}/${base_name}/checkpoint"
                 n_cpt_deleted=$((n_cpt_deleted + 1))
             fi
         else
@@ -174,4 +184,4 @@ echo "  Skipped (existed):  $n_skipped"
 echo "  Failed:             $n_failed"
 echo "  CPT adapters freed: $n_cpt_deleted"
 echo
-echo "Next: bash scripts/pod/run_variants_eval_sft.sh"
+echo "Next: VARIANT=${VARIANT:-} bash scripts/pod/run_variants_eval_sft.sh"
