@@ -30,20 +30,24 @@ set -uo pipefail   # NOT -e — let individual evals fail without killing the wa
 
 START_YEAR="${1:-1931}"
 END_YEAR="${2:-2020}"
+VARIANT="${VARIANT:-}"                # "" = talkie chain, "nanochat" = nanochat chain
+SUFFIX="${VARIANT:+_${VARIANT}}"      # "" or "_nanochat"
 
 # GPU count: auto-detect; override with NUM_GPUS=N env var.
 NUM_GPUS="${NUM_GPUS:-$(nvidia-smi -L 2>/dev/null | wc -l)}"
 if [[ -z "$NUM_GPUS" || "$NUM_GPUS" -lt 1 ]]; then NUM_GPUS=1; fi
 
 export TALKIE_WEIGHTS_DIR="${TALKIE_WEIGHTS_DIR:-${HOME}/talkie_base}"
+export NANOCHAT_WEIGHTS_DIR="${NANOCHAT_WEIGHTS_DIR:-${HOME}/nanochat_base}"
 export POLICY_PRED_DATA_ROOT="${POLICY_PRED_DATA_ROOT:-${HOME}/policy_pred_data}"
 
 echo "============================================================="
-echo "  Sharded variant-aware eval"
+echo "  Sharded variant-aware eval (CPT-only chain)"
 echo "============================================================="
 echo "  Year range:    ${START_YEAR}..${END_YEAR}"
+echo "  Variant:       ${VARIANT:-talkie (default)}"
 echo "  GPU shards:    ${NUM_GPUS}"
-echo "  Logs:          /tmp/eval_shard_<N>.log"
+echo "  Logs:          /tmp/eval${SUFFIX}_shard_<N>.log"
 echo
 
 # --- Activate venv if present ---
@@ -55,12 +59,18 @@ fi
 # --- Build the year list, skipping years whose checkpoint is missing ---
 years=()
 for y in $(seq "$START_YEAR" "$END_YEAR"); do
-    ckpt="${POLICY_PRED_DATA_ROOT}/experiments/policy_${y}_naive/checkpoint"
-    if [[ -f "$ckpt/adapter_config.json" ]]; then
-        years+=("$y")
-    else
+    base_name="policy_${y}_naive${SUFFIX}"
+    ckpt="${POLICY_PRED_DATA_ROOT}/experiments/${base_name}/checkpoint"
+    yaml="experiments/${base_name}.yaml"
+    if [[ ! -f "$ckpt/adapter_config.json" ]]; then
         echo "  SKIP year=$y (no adapter at $ckpt)"
+        continue
     fi
+    if [[ ! -f "$yaml" ]]; then
+        echo "  SKIP year=$y (no YAML at $yaml)"
+        continue
+    fi
+    years+=("$y")
 done
 n_total=${#years[@]}
 if [[ "$n_total" -eq 0 ]]; then
@@ -85,14 +95,15 @@ pids=()
 for shard in $(seq 0 $((NUM_GPUS - 1))); do
     yrs="${shard_years[$shard]:-}"
     [[ -z "$yrs" ]] && continue
-    log="/tmp/eval_shard_${shard}.log"
+    log="/tmp/eval${SUFFIX}_shard_${shard}.log"
     echo "  shard=$shard  GPU=$shard  years: $yrs  log: $log"
     (
         export CUDA_VISIBLE_DEVICES=$shard
         for y in $yrs; do
+            base_name="policy_${y}_naive${SUFFIX}"
             yr_start=$(date +%s)
             python3 eval.py \
-                --experiment "experiments/policy_${y}_naive.yaml" \
+                --experiment "experiments/${base_name}.yaml" \
                 --evaluator policy_battery_variants \
                 --force \
                 > "${log}.${y}" 2>&1 \
@@ -106,8 +117,8 @@ done
 
 echo
 echo "Launched ${#pids[@]} shards. Follow live progress with:"
-echo "  tail -f /tmp/eval_shard_*.log"
-echo "Or inspect per-year logs at /tmp/eval_shard_<S>.log.<YYYY>"
+echo "  tail -f /tmp/eval${SUFFIX}_shard_*.log"
+echo "Or inspect per-year logs at /tmp/eval${SUFFIX}_shard_<S>.log.<YYYY>"
 echo
 
 # --- Wait for all shards ---
@@ -119,8 +130,8 @@ for pid in "${pids[@]}"; do
 done
 
 total_elapsed=$(( $(date +%s) - start_time ))
-n_eval_json=$(find "${POLICY_PRED_DATA_ROOT}/experiments" -name eval.json \
-    -newer "/tmp/eval_shard_0.log" 2>/dev/null | wc -l)
+n_eval_json=$(find "${POLICY_PRED_DATA_ROOT}/experiments" -path "*_naive${SUFFIX}/eval.json" \
+    -newer "/tmp/eval${SUFFIX}_shard_0.log" 2>/dev/null | wc -l)
 
 echo
 echo "============================================================="
@@ -133,5 +144,5 @@ echo "  Failed shards:    $n_failed"
 echo
 echo "Pull results back to local with:"
 echo "  cd $POLICY_PRED_DATA_ROOT/experiments"
-echo "  tar czf /tmp/chain_evals.tgz policy_*/eval.json"
-echo "  # WinSCP /tmp/chain_evals.tgz to local C:/tmp/"
+echo "  tar czf /tmp/chain${SUFFIX}_evals.tgz policy_*_naive${SUFFIX}/eval.json"
+echo "  # WinSCP /tmp/chain${SUFFIX}_evals.tgz to local C:/tmp/"
