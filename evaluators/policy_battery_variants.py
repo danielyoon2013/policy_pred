@@ -171,21 +171,30 @@ def run(backend, cfg: dict) -> dict:
 
     policies = _apply_filter(policies, cfg.get("filter") or {})
 
-    # Lookback-window filter: each year-model Y should probe only policies
-    # enacted in [Y, Y + lookback_years]. That gives every policy a clean
-    # -lookback..0 relative-time series across the chain.
+    # Window filter: restrict which policies this year-model probes by enactment
+    # year E relative to the model year. Two modes:
+    #   window_years (symmetric): |model_year - E| <= window_years -> lookback in
+    #     [-w, +w], so every policy is scored both before AND after enactment
+    #     (the n-shape). Round-2 default.
+    #   lookback_years (legacy, asymmetric): model_year <= E <= model_year+lb,
+    #     i.e. lookback in [-lb, 0] only. Round-1 YAMLs use this; kept for compat.
+    window_years = cfg.get("window_years")
     lookback_years = cfg.get("lookback_years")
-    if lookback_years is not None:
+    if window_years is not None or lookback_years is not None:
         import re as _re
         exp_name = cfg.get("_experiment_name", "")
         m = _re.search(r"_(\d{4})_", exp_name) or _re.search(r"(\d{4})", exp_name)
         if m:
             model_year = int(m.group(1))
-            lo, hi = model_year, model_year + int(lookback_years)
+            if window_years is not None:
+                lo = model_year - int(window_years)
+                hi = model_year + int(window_years)
+            else:
+                lo, hi = model_year, model_year + int(lookback_years)
             before = len(policies)
             policies = [p for p in policies
                         if lo <= int(p.get("implementation_year", -1)) <= hi]
-            print(f"  lookback filter (model_year={model_year}, "
+            print(f"  window filter (model_year={model_year}, "
                   f"window=[{lo},{hi}]): {before} -> {len(policies)} policies")
 
     if not policies:
