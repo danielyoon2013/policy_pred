@@ -1,3 +1,5 @@
+FRAMING: frame = {frame}
+
 Legal passage ({year}):
 
 {passage}

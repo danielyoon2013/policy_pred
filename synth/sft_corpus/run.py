@@ -139,10 +139,17 @@ def load_seed_passages(year: int, legal_path: Path, n_seeds: int, seed: int) -> 
 
 
 def call_one_seed(client, *, system: str, user_template: str, passage: str,
-                  year: int, model: str, temperature: float, max_tokens: int,
-                  max_seed_chars: int) -> dict | None:
-    """One passage -> validated {question, yesno, likert, rationale} or None."""
+                  year: int, frame: str, model: str, temperature: float,
+                  max_tokens: int, max_seed_chars: int) -> dict | None:
+    """One passage -> validated {question, yesno, likert, rationale} or None.
+
+    `frame` ("affirm" | "oppose") balances question polarity: legal holdings are
+    overwhelmingly affirmative, so without alternating the frame the labels skew
+    ~90% Yes / Strongly-agree. Alternating yields a natural spread while each
+    label stays grounded in the passage's actual stance.
+    """
     user = user_template.replace("{year}", str(year)) \
+                        .replace("{frame}", frame) \
                         .replace("{passage}", passage[:max_seed_chars])
     sys_prompt = system.replace("{year}", str(year))
     try:
@@ -194,11 +201,13 @@ def generate_year(client, year: int, cfg: dict, legal_path: Path, out_path: Path
     t0 = time.time()
     done = 0
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        # Alternate affirm/oppose framing per passage to balance question polarity.
         futures = [ex.submit(call_one_seed, client, system=system,
                              user_template=user_template, passage=p, year=year,
+                             frame=("affirm" if i % 2 == 0 else "oppose"),
                              model=model, temperature=temperature,
                              max_tokens=max_tokens, max_seed_chars=max_seed_chars)
-                   for p in passages]
+                   for i, p in enumerate(passages)]
         for fut in as_completed(futures):
             res = fut.result()
             done += 1
