@@ -16,10 +16,10 @@ Hypothesis: a model trained only on text through year Y "believes in" a policy m
 
 ## Architectural rules
 
-- **Cumulative training only.** Year-Y model = year-(Y-1)'s LoRA adapter + this year's text shard. The chain must not be reordered or parallelised across years.
-- **One base model: Talkie.** No backend abstraction layer (we tried, it was premature). If we ever need a second base model, we'll add it then, not pre-emptively.
+- **Pluggable aggregation (rolling-window default).** A year-Y model is base + LoRA on a weighted window of per-year data; the weighting is a pluggable function (`windowing.py`: rolling/exponential/cumulative/single). Rolling-window is the Round-2 default and trains years independently in parallel. *Cumulative chaining* (year-Y = year-(Y-1) adapter + year-Y shard, strictly sequential) was the Round-1 method, retained only as the archived baseline in `docs/findings/2026-05/cumulative/` — do not extend it.
+- **Backends are abstracted** via `backends/{base,talkie,nanochat,qwen}.py` + `load_backend` (PEP-544 protocol, dispatched by a YAML `model_type`). Talkie 13B and nanochat 1.36B are both real and validated. (Supersedes the earlier "Talkie only, no abstraction" rule.)
 - **LoRA-only.** Full fine-tuning of 13B is ruled out — see Compute model below.
-- **V1 is real text only.** Generative synthesis (using OpenAI to expand pre-enactment policy discourse for SFT) is V2 territory; don't rebuild it inline. See "V2: synthesis (deferred)" below.
+- **Synthetic data is the training substrate.** Per-year synthetic text (from legal-corpus seeds via OpenAI) is the LoRA training data; per-year corpus-grounded SFT pairs teach the probe format. Leakage discipline (no catalog policy named in synth output) still holds — see "V2: synthesis" below.
 - **Length-normalized log-prob is the eval primitive.** `score_continuations(prompt, options)` returns per-token average log-prob. Same shape works for Yes/No and 4-way MC.
 
 ## Repository conventions

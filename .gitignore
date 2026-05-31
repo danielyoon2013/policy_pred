@@ -48,5 +48,7 @@ data_artifacts/
 # Symlinks/junctions pointing at external data (hist_llm, synth outputs)
 data_links/
 
-# Generated plot outputs
+# Generated plot outputs (scratch). Findings-report figures are committed artifacts.
 figures/
+!docs/findings/**/figures/
+!docs/findings/**/figures/**
