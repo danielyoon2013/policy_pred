@@ -76,12 +76,16 @@ def parse_args() -> argparse.Namespace:
     g.add_argument("--year", type=int, help="Single year to generate.")
     g.add_argument("--years", help="Range/list, e.g. 1931-2019 or 1935,1940.")
     p.add_argument("--config", type=Path, default=HERE / "config.yaml")
+    p.add_argument("--corpus-root", type=Path, default=None,
+                   help="Base dir holding per-year <Y>/legal.parquet (and where "
+                        "<Y>/sft_corpus.jsonl is written). Matches run_synth_batch's "
+                        "--corpus-root (e.g. C:/tmp/policy_pred/years). Default: "
+                        "$POLICY_PRED_DATA_ROOT/years.")
     p.add_argument("--legal-path", type=Path, default=None,
-                   help="Override the per-year legal parquet "
-                        "(default: $POLICY_PRED_DATA_ROOT/years/<Y>/legal.parquet).")
+                   help="Override the per-year legal parquet for a single --year.")
     p.add_argument("--out", type=Path, default=None,
                    help="Override output path (single --year only). "
-                        "Default: <data_root>/years/<Y>/sft_corpus.jsonl.")
+                        "Default: <corpus-root>/<Y>/sft_corpus.jsonl.")
     p.add_argument("--n-seeds", type=int, default=None)
     p.add_argument("--model", default=None)
     p.add_argument("--temperature", type=float, default=None)
@@ -114,11 +118,18 @@ def parse_years(spec: str) -> list[int]:
     return sorted(set(out))
 
 
-def _legal_path_for(year: int, override: Path | None) -> Path:
+def _years_root(corpus_root: Path | None) -> Path:
+    """Base dir holding per-year <Y>/ subdirs (corpus-root, else data-root/years)."""
+    if corpus_root is not None:
+        return corpus_root
+    root = Path(os.environ.get("POLICY_PRED_DATA_ROOT") or "D:/hist_LLM/policy_pred")
+    return root / "years"
+
+
+def _legal_path_for(year: int, override: Path | None, corpus_root: Path | None) -> Path:
     if override is not None:
         return override
-    root = Path(os.environ.get("POLICY_PRED_DATA_ROOT") or "D:/hist_LLM/policy_pred")
-    return root / "years" / str(year) / "legal.parquet"
+    return _years_root(corpus_root) / str(year) / "legal.parquet"
 
 
 def load_seed_passages(year: int, legal_path: Path, n_seeds: int, seed: int) -> list[str]:
@@ -252,13 +263,13 @@ def main() -> None:
     from openai import OpenAI
     client = OpenAI()
 
-    data_root = Path(os.environ.get("POLICY_PRED_DATA_ROOT") or "D:/hist_LLM/policy_pred")
+    years_root = _years_root(args.corpus_root)
     for year in years:
-        legal_path = _legal_path_for(year, args.legal_path)
+        legal_path = _legal_path_for(year, args.legal_path, args.corpus_root)
         if not legal_path.exists():
             print(f"  year {year}: legal corpus missing at {legal_path}; skip.")
             continue
-        out_path = args.out or (data_root / "years" / str(year) / "sft_corpus.jsonl")
+        out_path = args.out or (years_root / str(year) / "sft_corpus.jsonl")
         print(f"=== {year} ===")
         generate_year(client, year, cfg, legal_path, out_path, args.force)
 
