@@ -106,6 +106,54 @@ def test_stable_order_deterministic_and_year_keyed():
     assert w.stable_order(1950, 1000) != w.stable_order(1951, 1000)   # year-specific
 
 
+def _write_distinct(tmp_path, n):
+    p = tmp_path / "distinct.jsonl"
+    p.write_text("\n".join(f'{{"text": "doc {i}", "metadata": {{"seed_idx": {i}}}}}'
+                           for i in range(n)) + "\n", encoding="utf-8")
+    return p
+
+
+def test_build_pool_sparse_year_resamples_to_target(tmp_path):
+    distinct = _write_distinct(tmp_path, 13)          # sparse: 13 < target 40
+    out = tmp_path / "pool.jsonl"
+    man = w.build_pool(distinct, out, 1945, target=40, seed=0)
+    lines = out.read_text(encoding="utf-8").splitlines()
+    assert man["n_distinct"] == 13 and man["n_total"] == 40
+    assert man["resampled"] == 27
+    assert len(lines) == 40
+    # Distinct-records-first: the first 13 are exactly the 13 distinct docs.
+    assert len(set(lines[:13])) == 13
+    # Everything after is drawn from the distinct set (no novel records).
+    assert set(lines).issubset(set(lines[:13]))
+
+
+def test_build_pool_rich_year_truncates_no_dupes(tmp_path):
+    distinct = _write_distinct(tmp_path, 100)         # rich: 100 >= target 40
+    out = tmp_path / "pool.jsonl"
+    man = w.build_pool(distinct, out, 2010, target=40, seed=0)
+    lines = out.read_text(encoding="utf-8").splitlines()
+    assert man["n_distinct"] == 100 and man["n_total"] == 40
+    assert man["resampled"] == 0
+    assert len(set(lines)) == 40                      # all distinct
+
+
+def test_build_pool_low_levels_all_distinct(tmp_path):
+    # A sweep level <= n_distinct must draw only distinct records.
+    distinct = _write_distinct(tmp_path, 13)
+    out = tmp_path / "pool.jsonl"
+    w.build_pool(distinct, out, 1945, target=40, seed=0)
+    lines = out.read_text(encoding="utf-8").splitlines()
+    assert len(set(lines[:10])) == 10                 # first 10 (< 13) all unique
+
+
+def test_build_pool_deterministic(tmp_path):
+    distinct = _write_distinct(tmp_path, 30)
+    a, b = tmp_path / "a.jsonl", tmp_path / "b.jsonl"
+    w.build_pool(distinct, a, 1945, target=50, seed=0)
+    w.build_pool(distinct, b, 1945, target=50, seed=0)
+    assert a.read_text(encoding="utf-8") == b.read_text(encoding="utf-8")
+
+
 def test_experiment_name_convention():
     spec = w.parse_spec("roll10")
     assert w.experiment_name(1950, "nanochat", spec, 40000, False) == \

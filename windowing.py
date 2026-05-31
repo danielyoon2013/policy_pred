@@ -159,6 +159,47 @@ def stable_order(pool_year: int, n_records: int, seed: int = 0) -> list[int]:
     return idx
 
 
+def build_pool(distinct_jsonl: Path, out_pool: Path, year: int, target: int,
+               *, seed: int = 0) -> dict:
+    """Build a uniform-size year pool from distinct synth records.
+
+    Reads the distinct synth (one record per legal seed, output of
+    synth/naive at n_per_seed=1), orders it deterministically via stable_order
+    (distinct-records-first), then — per the professor-decided equalization —
+    appends identical resample-WITH-REPLACEMENT duplicates until the pool
+    reaches `target` (e.g. 40k). Rich years (>= target distinct) are truncated to
+    the first `target`. Writes the pool jsonl + a sibling .manifest.json carrying
+    `n_distinct` so downstream assembly can report effective_unique.
+
+    Distinct-first ordering is what keeps the {5k,10k,20k,40k} sweep honest: any
+    level <= n_distinct draws only distinct records; duplicates appear only in the
+    high levels of sparse years.
+    """
+    lines = [ln.rstrip("\n") for ln in open(distinct_jsonl, encoding="utf-8")
+             if ln.strip()]
+    n_distinct = len(lines)
+    order = stable_order(year, n_distinct, seed=seed)
+    ordered = [lines[i] for i in order]
+
+    if n_distinct >= target:
+        pool = ordered[:target]
+    else:
+        # Resample-with-replacement to fill the gap, deterministically.
+        rng = random.Random(zlib.crc32(f"{seed}:{year}:resample".encode()))
+        pool = list(ordered)
+        pool.extend(rng.choices(ordered, k=target - n_distinct))
+
+    out_pool.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_pool, "w", encoding="utf-8") as f:
+        f.write("\n".join(pool) + ("\n" if pool else ""))
+    manifest = {"year": year, "n_distinct": n_distinct, "n_total": len(pool),
+                "target": target, "resampled": max(0, len(pool) - n_distinct),
+                "seed": seed, "source": str(distinct_jsonl)}
+    out_pool.with_suffix(".manifest.json").write_text(
+        json.dumps(manifest, indent=2), encoding="utf-8")
+    return manifest
+
+
 def experiment_name(year: int, backend: str, spec: WeightSpec,
                     per_year: int, sft: bool) -> str:
     """The single naming source: policy_<Y>_<backend>_<spec>_n<X>[_sft]."""
@@ -309,7 +350,23 @@ def _cli() -> None:
     s.add_argument("--sft", action="store_true")
     s.add_argument("--out-dir", type=Path, default=Path("experiments/windows"))
 
+    s = sub.add_parser("build-pool")
+    s.add_argument("--year", type=int, required=True)
+    s.add_argument("--distinct", type=Path, required=True,
+                   help="Distinct synth jsonl (synth/naive output, n_per_seed=1).")
+    s.add_argument("--out", type=Path, required=True, help="Pool jsonl to write.")
+    s.add_argument("--target", type=int, default=40000)
+    s.add_argument("--seed", type=int, default=0)
+
     args = p.parse_args()
+    if args.cmd == "build-pool":
+        man = build_pool(args.distinct, args.out, args.year, args.target,
+                         seed=args.seed)
+        print(args.out)
+        print(f"  {man['n_distinct']} distinct -> {man['n_total']} pool "
+              f"({man['resampled']} resampled)")
+        return
+
     spec = parse_spec(args.spec)
 
     if args.cmd == "name":
