@@ -1,20 +1,26 @@
-You build an evaluation-format teaching set from historical legal texts. You will be given a single legal passage from the year {year}, plus a FRAMING instruction.
+You build an evaluation-format teaching set from historical legal texts. You are given one legal passage from the year {year}.
 
-Do the following:
+Your job: turn the SPECIFIC dispute in the passage into the BROAD normative policy question it instantiates, and answer it as a thoughtful contemporary of {year} would, judging only from the era's own reasoning.
 
-1. Identify a normative policy question of the form "Should ...?" that the passage bears on — debatable by a contemporary of {year}, answerable from the passage's own reasoning (not requiring outside facts).
-2. Apply the FRAMING:
-   - frame = affirm: phrase the question so the passage's own reasoning supports answering it YES / agreeing.
-   - frame = oppose: phrase the question as the OPPOSITE of what the passage concludes, so the passage's reasoning supports answering it NO / disagreeing (e.g. if the passage upholds a duty, ask "Should parties be free from that duty?").
-3. Give the answer the passage's stance actually implies for the question as framed — honestly. Do NOT hedge toward neutrality; if the passage takes a clear side, take it. The Likert STRENGTH should reflect how strongly the passage commits (a firm holding → "Strongly agree"/"Strongly disagree"; a close or qualified one → "Agree"/"Disagree"; genuinely balanced → "Uncertain").
-4. Give a one-sentence rationale grounded in the passage.
-
-Scales:
-- yesno: exactly "Yes" or "No".
-- likert: exactly one of "Strongly agree", "Agree", "Uncertain", "Disagree", "Strongly disagree" (agreement with the "Should ...?" question as framed).
+Steps:
+1. Read the passage and identify the general PRINCIPLE it bears on — the kind of broad "Should ...?" policy question a legislature or informed public of {year} might debate. State the question at that POLICY level, NOT about the specific parties, facts, or procedure.
+   - Narrow (DO NOT do this): "Should the burden of proof for contributory negligence lie with the defendant?"
+   - Broad principle (DO this): "Should the law make it easier for injured people to recover from those who harm them?"
+   Target the altitude of these examples:
+     - "Should the law hold businesses responsible for harms their operations cause to others?"
+     - "Should courts enforce clearly written contracts over later claims of unfairness?"
+     - "Should the state strictly punish the sale of prohibited goods?"
+     - "Should government regulate the terms on which credit is extended to ordinary people?"
+2. Answer whether the era's reasoning, as reflected in the passage, supports the principle:
+   - yesno: exactly "Yes" or "No".
+   - likert: agreement with the question, with STRENGTH graded by how SETTLED the principle was in the era's reasoning:
+       firmly / near-universally settled  -> "Strongly agree" or "Strongly disagree"
+       generally accepted but debatable    -> "Agree" or "Disagree"
+       genuinely contested or unsettled    -> "Uncertain"
+3. Give a one-sentence rationale grounded in the passage.
 
 Rules:
-- Era-appropriate framing for {year}. Do NOT name or allude to any specific legislation, court case, agency, or event from after {year}.
-- Keep the question a general normative principle, not a recital of the passage's facts.
-- "Uncertain" only when the passage genuinely takes no side — do not default to it.
+- Phrase the question in ONE natural direction (the way the principle is normally stated). Do NOT negate it artificially or ask the opposite.
+- Era-appropriate for {year}. Do NOT name or allude to any specific statute, act, amendment, court case, agency, program, or named event (of ANY year). Keep it a general principle a person could debate from first principles.
+- Derive everything from the passage's own reasoning — no outside facts and no later (post-{year}) knowledge.
 - Output a single JSON object and nothing else: {"question": "...", "yesno": "Yes|No", "likert": "...", "rationale": "..."}

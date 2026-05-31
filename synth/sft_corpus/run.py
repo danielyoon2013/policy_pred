@@ -149,18 +149,40 @@ def load_seed_passages(year: int, legal_path: Path, n_seeds: int, seed: int) -> 
     return [passages[i] for i in order[:n_seeds]]
 
 
-def call_one_seed(client, *, system: str, user_template: str, passage: str,
-                  year: int, frame: str, model: str, temperature: float,
-                  max_tokens: int, max_seed_chars: int) -> dict | None:
-    """One passage -> validated {question, yesno, likert, rationale} or None.
+def load_banned_phrases(csv_path: Path) -> set[str]:
+    """Distinctive catalog policy/case names to screen out of SFT questions.
 
-    `frame` ("affirm" | "oppose") balances question polarity: legal holdings are
-    overwhelmingly affirmative, so without alternating the frame the labels skew
-    ~90% Yes / Strongly-agree. Alternating yields a natural spread while each
-    label stays grounded in the passage's actual stance.
+    The SFT must not supply belief about the very policies the eval measures, so
+    we drop any generated question that names a catalog policy/case. This catches
+    blatant leakage (verbatim names); semantic topic-overlap is checked by the
+    pre-scale audit, not here.
+    """
+    import csv
+    import re as _re
+    banned: set[str] = set()
+    if not csv_path.exists():
+        return banned
+    for r in csv.DictReader(open(csv_path, encoding="utf-8")):
+        name = (r.get("policy_or_case") or "").strip().lower()
+        if not name:
+            continue
+        banned.add(name)
+        banned.add(_re.sub(r"\s+of\s+\d{4}$", "", name).strip())  # drop trailing year
+        if " v. " in name:                                        # case party names
+            banned.update(p.strip() for p in name.split(" v. "))
+    return {b for b in banned if len(b) >= 5}                     # skip too-generic stubs
+
+
+def call_one_seed(client, *, system: str, user_template: str, passage: str,
+                  year: int, banned: set[str], model: str, temperature: float,
+                  max_tokens: int, max_seed_chars: int) -> tuple[str, dict | None]:
+    """One passage -> ("ok", rec) | ("leak", None) | ("fail", None).
+
+    Single-direction: the question is the broad policy principle the passage
+    instantiates, phrased one way; the answer follows the era's stance. "leak"
+    means the generated question named a catalog policy/case (dropped).
     """
     user = user_template.replace("{year}", str(year)) \
-                        .replace("{frame}", frame) \
                         .replace("{passage}", passage[:max_seed_chars])
     sys_prompt = system.replace("{year}", str(year))
     try:
@@ -175,15 +197,18 @@ def call_one_seed(client, *, system: str, user_template: str, passage: str,
         rec = json.loads(_strip_code_fences(resp.choices[0].message.content))
     except Exception as e:  # API or JSON failure — skip this seed
         print(f"  [seed] error: {e}", file=sys.stderr)
-        return None
+        return "fail", None
     q = rec.get("question", "")
     yn = rec.get("yesno", "")
     lk = rec.get("likert", "")
     if not (isinstance(q, str) and q.strip().endswith("?")
             and yn in YESNO_LABELS and lk in LIKERT_LABELS):
-        return None
-    return {"question": q.strip(), "yesno": yn, "likert": lk,
-            "rationale": str(rec.get("rationale", "")).strip()}
+        return "fail", None
+    ql = q.lower()
+    if any(b in ql for b in banned):
+        return "leak", None
+    return "ok", {"question": q.strip(), "yesno": yn, "likert": lk,
+                  "rationale": str(rec.get("rationale", "")).strip()}
 
 
 def generate_year(client, year: int, cfg: dict, legal_path: Path, out_path: Path,
@@ -205,24 +230,29 @@ def generate_year(client, year: int, cfg: dict, legal_path: Path, out_path: Path
     passages = load_seed_passages(year, legal_path, n_seeds, seed)
     system = (HERE / "prompts" / "system.md").read_text(encoding="utf-8")
     user_template = (HERE / "prompts" / "user.md").read_text(encoding="utf-8")
-    print(f"  year {year}: {len(passages)} seed passages, model={model}")
+    banned = load_banned_phrases(Path(cfg.get("battery_csv", "us_policy_event_battery_v4.csv")))
+    print(f"  year {year}: {len(passages)} seed passages, model={model}, "
+          f"{len(banned)} catalog phrases screened")
 
     records: list[dict] = []
     label_hist: dict[str, int] = {}
+    n_ok = n_leak = n_fail = done = 0
     t0 = time.time()
-    done = 0
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        # Alternate affirm/oppose framing per passage to balance question polarity.
         futures = [ex.submit(call_one_seed, client, system=system,
                              user_template=user_template, passage=p, year=year,
-                             frame=("affirm" if i % 2 == 0 else "oppose"),
-                             model=model, temperature=temperature,
+                             banned=banned, model=model, temperature=temperature,
                              max_tokens=max_tokens, max_seed_chars=max_seed_chars)
-                   for i, p in enumerate(passages)]
+                   for p in passages]
         for fut in as_completed(futures):
-            res = fut.result()
+            status, res = fut.result()
             done += 1
-            if res is not None:
+            if status == "leak":
+                n_leak += 1
+            elif status == "fail":
+                n_fail += 1
+            else:
+                n_ok += 1
                 meta = {"generator": "sft_corpus", "year": year,
                         "yesno": res["yesno"], "likert": res["likert"]}
                 records.append({
@@ -245,7 +275,8 @@ def generate_year(client, year: int, cfg: dict, legal_path: Path, out_path: Path
     with open(out_path, "w", encoding="utf-8") as f:
         for r in records:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    print(f"  wrote {len(records)} records -> {out_path}")
+    print(f"  wrote {len(records)} records -> {out_path} "
+          f"(ok={n_ok}, leak-dropped={n_leak}, fail={n_fail})")
     print("  label distribution (NOT forced — emerges from corpus):")
     for label in YESNO_LABELS + LIKERT_LABELS:
         print(f"    {label:>16s}: {label_hist.get(label, 0)}")
