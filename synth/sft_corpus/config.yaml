@@ -1,0 +1,18 @@
+# Corpus-grounded SFT generator (Round 2).
+#
+# Per year, sample K legal passages and produce probe-shaped Q/A pairs whose
+# answers reflect the stance each passage supports — the Yes/No and Likert label
+# distributions EMERGE from the corpus (no forced 20%x5 balance). One passage ->
+# one normative question -> one Yes/No record + one Likert record.
+
+n_seeds: 2500            # legal passages per year -> 2*n_seeds probe records
+max_seed_chars: 4000     # truncate each passage before sending to the model
+model: gpt-4o-mini
+temperature: 0.7
+max_tokens: 600          # one question + two labels + a short rationale
+max_workers: 8
+
+# MUST match the LoRA pool's stable_order seed (windowing.stable_order, Phase 1a)
+# so the SFT passages are a prefix of the LoRA seed order -> SFT seeds subset of
+# LoRA seeds. Do not change independently of synth/naive.
+seed: 0
