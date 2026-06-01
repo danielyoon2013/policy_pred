@@ -281,3 +281,7 @@ Don't forget. Lambda / RunPod don't auto-stop billing when you close the SSH ses
 **`accelerate launch` hangs at startup** — port conflict with a previous run. `pkill -f "python train.py"` and retry.
 
 **Multi-GPU saves only one process's adapter** — that's by design. Only rank 0 (main process) writes the checkpoint; other ranks call `accelerator.wait_for_everyone()` and exit. The adapter at `$POLICY_PRED_DATA_ROOT/experiments/<name>/checkpoint/` is the canonical output.
+
+**`scaled_dot_product_attention() got an unexpected keyword argument 'enable_gqa'`** — the pod's torch is too old. The nanochat vendor (`flash_attention.py`) uses `enable_gqa`, added in **torch 2.5**. Some pod images ship torch 2.4.x. Fix: `pip install 'torch==2.5.1' --index-url https://download.pytorch.org/whl/cu124` (match your CUDA; the driver already supports it). Verify with `python -c "import torch; print(torch.__version__)"` → ≥2.5.
+
+**Window matrix: CUDA OOM with `JOBS_PER_GPU=2`** — for the rolling-window scripts (`train_window_matrix.sh`), a single nanochat cell at X=5k uses ~25–53 GB, so two per 80 GB GPU OOM. Use **`JOBS_PER_GPU=1`** (the default). Parallelism comes from multiple GPUs, not packing one. Note: at X=5k a roll10 cell is ~50k records → ~20 min/cell; the full matrix at higher X is much heavier — prefer a 4-GPU box and the smaller X levels first.

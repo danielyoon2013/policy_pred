@@ -44,6 +44,7 @@ BATCH_WORK="${BATCH_WORK:-C:/tmp/policy_pred/batch_work_r2}"
 
 if [[ ! -f "$KEY_FILE" ]]; then echo "ERROR: OpenAI key not at $KEY_FILE"; exit 1; fi
 OPENAI_API_KEY=$(tr -d '[:space:]' < "$KEY_FILE"); export OPENAI_API_KEY
+export PYTHONUNBUFFERED=1   # so per-stage python output is visible in background/redirected runs
 mkdir -p "$POOL_DIR" "$BATCH_WORK"
 
 echo "============================================================="
