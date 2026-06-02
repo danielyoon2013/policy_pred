@@ -36,11 +36,15 @@ try:
         LIKERT_OPTIONS,
         LIKERT_VALUES,
         YESNO_OPTIONS,
+        ANSWER_MARKER,
         _load_catalog,
         _load_csv,
         _apply_filter,
         _build_yesno_prompt,
         _build_likert_prompt,
+        chat_prompt,
+        build_yesno_cot_user,
+        build_likert_cot_user,
     )
 except ImportError:
     from policy_battery import (  # type: ignore[no-redef]
@@ -48,11 +52,15 @@ except ImportError:
         LIKERT_OPTIONS,
         LIKERT_VALUES,
         YESNO_OPTIONS,
+        ANSWER_MARKER,
         _load_catalog,
         _load_csv,
         _apply_filter,
         _build_yesno_prompt,
         _build_likert_prompt,
+        chat_prompt,
+        build_yesno_cot_user,
+        build_likert_cot_user,
     )
 
 
@@ -86,68 +94,128 @@ def _load_variants_for(event_id: str, variants_dir: Path) -> list[str]:
 # but inline the math so we can collect per-variant arrays cleanly.
 # ---------------------------------------------------------------------------
 
-def _score_yesno_variants(backend, variants: list[str]) -> dict:
-    p_yes_list: list[float] = []
-    logp_yes_list: list[float] = []
-    logp_no_list: list[float] = []
-    for q in variants:
-        prompt = _build_yesno_prompt(q)
-        scores = backend.score_continuations(prompt, YESNO_OPTIONS)
-        logp_yes, logp_no = scores
-        m = max(logp_yes, logp_no)
-        p_yes_exp = math.exp(logp_yes - m)
-        p_no_exp = math.exp(logp_no - m)
-        p_yes = p_yes_exp / (p_yes_exp + p_no_exp)
-        p_yes_list.append(p_yes)
-        logp_yes_list.append(logp_yes)
-        logp_no_list.append(logp_no)
+def _yesno_from_logps(logp_yes: float, logp_no: float) -> float:
+    m = max(logp_yes, logp_no)
+    a, b = math.exp(logp_yes - m), math.exp(logp_no - m)
+    return a / (a + b)
+
+
+def _aggregate_yesno(p_yes_list, logp_yes_list, logp_no_list, extra=None) -> dict:
     n = len(p_yes_list)
     if n == 0:
         return {"n_variants": 0}
     mean = sum(p_yes_list) / n
     std = (sum((x - mean) ** 2 for x in p_yes_list) / n) ** 0.5 if n > 1 else 0.0
-    return {
-        "n_variants": n,
-        "mean_p_yes": mean,
-        "std_p_yes": std,
-        "p_yes_per_variant": p_yes_list,
-        "logp_yes_per_variant": logp_yes_list,
-        "logp_no_per_variant": logp_no_list,
-    }
+    out = {"n_variants": n, "mean_p_yes": mean, "std_p_yes": std,
+           "p_yes_per_variant": p_yes_list, "logp_yes_per_variant": logp_yes_list,
+           "logp_no_per_variant": logp_no_list}
+    if extra:
+        out.update(extra)
+    return out
 
 
-def _score_likert_variants(backend, variants: list[str]) -> dict:
-    score_list: list[float] = []
-    probs_list: list[list[float]] = []
-    logp_list: list[list[float]] = []
-    for q in variants:
-        prompt = _build_likert_prompt(q)
-        scores = backend.score_continuations(prompt, LIKERT_OPTIONS)
-        m = max(scores)
-        exps = [math.exp(s - m) for s in scores]
-        total = sum(exps)
-        probs = [e / total for e in exps]
-        weighted = sum(p * v for p, v in zip(probs, LIKERT_VALUES))
-        score_list.append(weighted)
-        probs_list.append(probs)
-        logp_list.append(list(scores))
+def _aggregate_likert(score_list, probs_list, logp_list, extra=None) -> dict:
     n = len(score_list)
     if n == 0:
         return {"n_variants": 0}
     mean = sum(score_list) / n
     std = (sum((x - mean) ** 2 for x in score_list) / n) ** 0.5 if n > 1 else 0.0
-    # Average per-option probability across variants for an aggregate distribution.
     n_opts = len(LIKERT_OPTIONS)
     mean_probs = [sum(p[i] for p in probs_list) / n for i in range(n_opts)]
-    return {
-        "n_variants": n,
-        "mean_score": mean,
-        "std_score": std,
-        "score_per_variant": score_list,
-        "mean_probs": dict(zip([o.strip() for o in LIKERT_OPTIONS], mean_probs)),
-        "probs_per_variant": probs_list,
-        "logp_per_variant": logp_list,
-    }
+    out = {"n_variants": n, "mean_score": mean, "std_score": std,
+           "score_per_variant": score_list,
+           "mean_probs": dict(zip([o.strip() for o in LIKERT_OPTIONS], mean_probs)),
+           "probs_per_variant": probs_list, "logp_per_variant": logp_list}
+    if extra:
+        out.update(extra)
+    return out
+
+
+def _likert_from_scores(scores: list[float]) -> tuple[float, list[float]]:
+    m = max(scores)
+    exps = [math.exp(s - m) for s in scores]
+    total = sum(exps)
+    probs = [e / total for e in exps]
+    return sum(p * v for p, v in zip(probs, LIKERT_VALUES)), probs
+
+
+def _score_yesno_variants(backend, variants: list[str], *, chat_format: bool = False) -> dict:
+    """Direct Yes/No probe. chat_format wraps the prompt in 'User:…\\n\\nAssistant:'
+    so the eval context matches how an SFT model was trained (vs bare for LoRA-only)."""
+    p_yes_list, logp_yes_list, logp_no_list = [], [], []
+    for q in variants:
+        prompt = _build_yesno_prompt(q)
+        if chat_format:
+            prompt = chat_prompt(prompt)
+        logp_yes, logp_no = backend.score_continuations(prompt, YESNO_OPTIONS)
+        p_yes_list.append(_yesno_from_logps(logp_yes, logp_no))
+        logp_yes_list.append(logp_yes)
+        logp_no_list.append(logp_no)
+    return _aggregate_yesno(p_yes_list, logp_yes_list, logp_no_list)
+
+
+def _score_likert_variants(backend, variants: list[str], *, chat_format: bool = False) -> dict:
+    score_list, probs_list, logp_list = [], [], []
+    for q in variants:
+        prompt = _build_likert_prompt(q)
+        if chat_format:
+            prompt = chat_prompt(prompt)
+        scores = backend.score_continuations(prompt, LIKERT_OPTIONS)
+        weighted, probs = _likert_from_scores(scores)
+        score_list.append(weighted)
+        probs_list.append(probs)
+        logp_list.append(list(scores))
+    return _aggregate_likert(score_list, probs_list, logp_list)
+
+
+# --- CoT scorers: generate the model's reasoning, THEN score the answer ---
+
+def _generate_reasoning(backend, gen_prompt: str, max_new_tokens: int) -> tuple[str, str]:
+    """Generate reasoning from gen_prompt, stopping at the answer marker.
+
+    Returns (reasoning_text_for_display, scoring_suffix) where scoring_suffix is
+    the generated reasoning truncated to end exactly at ANSWER_MARKER, so
+    score_continuations(gen_prompt + scoring_suffix, OPTIONS) reads the answer
+    at the position the CoT-SFT trained for. If the model never emits the marker
+    within the budget, we append it so a score is still defined.
+    """
+    gen = backend.generate(gen_prompt, max_new_tokens=max_new_tokens,
+                           stop_sequences=[ANSWER_MARKER])
+    idx = gen.find(ANSWER_MARKER)
+    if idx == -1:
+        suffix = gen.rstrip() + "\n\n" + ANSWER_MARKER
+    else:
+        suffix = gen[:idx + len(ANSWER_MARKER)]
+    return gen, suffix
+
+
+def _score_yesno_cot_variants(backend, variants: list[str], *, max_new_tokens: int = 256) -> dict:
+    p_yes_list, logp_yes_list, logp_no_list, reasonings = [], [], [], []
+    for q in variants:
+        gen_prompt = chat_prompt(build_yesno_cot_user(q))
+        reasoning, suffix = _generate_reasoning(backend, gen_prompt, max_new_tokens)
+        logp_yes, logp_no = backend.score_continuations(gen_prompt + suffix, YESNO_OPTIONS)
+        p_yes_list.append(_yesno_from_logps(logp_yes, logp_no))
+        logp_yes_list.append(logp_yes)
+        logp_no_list.append(logp_no)
+        reasonings.append(reasoning)
+    return _aggregate_yesno(p_yes_list, logp_yes_list, logp_no_list,
+                            extra={"reasoning_per_variant": reasonings})
+
+
+def _score_likert_cot_variants(backend, variants: list[str], *, max_new_tokens: int = 256) -> dict:
+    score_list, probs_list, logp_list, reasonings = [], [], [], []
+    for q in variants:
+        gen_prompt = chat_prompt(build_likert_cot_user(q))
+        reasoning, suffix = _generate_reasoning(backend, gen_prompt, max_new_tokens)
+        scores = backend.score_continuations(gen_prompt + suffix, LIKERT_OPTIONS)
+        weighted, probs = _likert_from_scores(scores)
+        score_list.append(weighted)
+        probs_list.append(probs)
+        logp_list.append(list(scores))
+        reasonings.append(reasoning)
+    return _aggregate_likert(score_list, probs_list, logp_list,
+                             extra={"reasoning_per_variant": reasonings})
 
 
 # ---------------------------------------------------------------------------
@@ -211,8 +279,14 @@ def run(backend, cfg: dict) -> dict:
         )
     cap = cfg.get("variants_per_policy")
     modes = cfg.get("modes") or ["yes_no", "likert5"]
+    # chat_format wraps direct-probe prompts in the User:/Assistant: rendering the
+    # SFT models were trained on; leave False for the LoRA-only baseline. CoT modes
+    # always use the chat rendering (they must, to match CoT-SFT training).
+    chat_format = bool(cfg.get("chat_format", False))
+    cot_max_new_tokens = int(cfg.get("cot_max_new_tokens", 256))
     print(f"  variants_dir: {variants_dir}")
-    print(f"  modes: {modes}")
+    print(f"  modes: {modes}  chat_format: {chat_format}"
+          + ("  (CoT generation is slow — variants capped)" if cap else ""))
 
     results: list[dict] = []
     for policy in policies:
@@ -226,18 +300,24 @@ def run(backend, cfg: dict) -> dict:
 
         scores: dict[str, Any] = {}
         if "yes_no" in modes:
-            scores["yes_no"] = _score_yesno_variants(backend, variants)
+            scores["yes_no"] = _score_yesno_variants(backend, variants, chat_format=chat_format)
         if "likert5" in modes:
-            scores["likert5"] = _score_likert_variants(backend, variants)
+            scores["likert5"] = _score_likert_variants(backend, variants, chat_format=chat_format)
+        if "yes_no_cot" in modes:
+            scores["yes_no_cot"] = _score_yesno_cot_variants(
+                backend, variants, max_new_tokens=cot_max_new_tokens)
+        if "likert5_cot" in modes:
+            scores["likert5_cot"] = _score_likert_cot_variants(
+                backend, variants, max_new_tokens=cot_max_new_tokens)
 
         # One-line summary per policy.
         summary = f"  {policy['id']:<32s}  n={len(variants):>3d}"
-        if "yes_no" in scores:
-            summary += (f"  P(yes)={scores['yes_no']['mean_p_yes']:.3f}"
-                        f"±{scores['yes_no']['std_p_yes']:.3f}")
-        if "likert5" in scores:
-            summary += (f"  likert={scores['likert5']['mean_score']:+.3f}"
-                        f"±{scores['likert5']['std_score']:.3f}")
+        for k in ("yes_no", "yes_no_cot"):
+            if k in scores and "mean_p_yes" in scores[k]:
+                summary += f"  {k}_P(yes)={scores[k]['mean_p_yes']:.3f}"
+        for k in ("likert5", "likert5_cot"):
+            if k in scores and "mean_score" in scores[k]:
+                summary += f"  {k}={scores[k]['mean_score']:+.3f}"
         print(summary)
 
         results.append({

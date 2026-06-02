@@ -41,25 +41,19 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 import windowing  # noqa: E402  (repo-root module)
+# Single source of truth for probe prompt formatting — the SFT records and the
+# eval prompts MUST be byte-identical up to the answer position, so the SFT
+# formatter reuses the exact builders the eval scores against. Direct records
+# use the bare builders; CoT records use the reason-then-answer builders.
+from evaluators.policy_battery import (  # noqa: E402
+    _build_yesno_prompt, _build_likert_prompt,
+    build_yesno_cot_user, build_likert_cot_user, cot_assistant,
+)
 
 HERE = Path(__file__).resolve().parent
 
 LIKERT_LABELS = ["Strongly agree", "Agree", "Uncertain", "Disagree", "Strongly disagree"]
 YESNO_LABELS = ["Yes", "No"]
-
-
-# --- Probe prompt formatting — must MATCH evaluators/policy_battery.py exactly ---
-
-def _build_yesno_user_prompt(question: str) -> str:
-    return f"{question}\n\nAnswer:"
-
-
-def _build_likert_user_prompt(question: str) -> str:
-    return ("Respond to the following question by rating your agreement:\n"
-            "\n"
-            f"{question}\n"
-            "\n"
-            "Answer:")
 
 
 def _strip_code_fences(text: str) -> str:
@@ -91,6 +85,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--temperature", type=float, default=None)
     p.add_argument("--max-workers", type=int, default=None)
     p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--cot", action="store_true",
+                   help="Generate-once-format-twice: write a rich record "
+                        "(question/reasoning/answer) plus BOTH renderings — "
+                        "<Y>/sft_direct.jsonl (question->answer) and "
+                        "<Y>/sft_cot.jsonl (question->reasoning->answer) — so the "
+                        "two SFT variants differ ONLY in reasoning. Without it, "
+                        "writes the legacy <Y>/sft_corpus.jsonl (direct only).")
     p.add_argument("--force", action="store_true")
     return p.parse_args()
 
@@ -201,22 +202,80 @@ def call_one_seed(client, *, system: str, user_template: str, passage: str,
     q = rec.get("question", "")
     yn = rec.get("yesno", "")
     lk = rec.get("likert", "")
+    reasoning = str(rec.get("reasoning", "")).strip()
     if not (isinstance(q, str) and q.strip().endswith("?")
-            and yn in YESNO_LABELS and lk in LIKERT_LABELS):
+            and yn in YESNO_LABELS and lk in LIKERT_LABELS and reasoning):
         return "fail", None
-    ql = q.lower()
-    if any(b in ql for b in banned):
+    # Leakage screen covers BOTH the question and the reasoning chain: the CoT
+    # reasoning is trained on verbatim, so a catalog name appearing there leaks
+    # belief about the very policy the eval measures, just like one in the question.
+    blob = f"{q}\n{reasoning}".lower()
+    if any(b in blob for b in banned):
         return "leak", None
     return "ok", {"question": q.strip(), "yesno": yn, "likert": lk,
-                  "rationale": str(rec.get("rationale", "")).strip()}
+                  "reasoning": reasoning}
 
 
-def generate_year(client, year: int, cfg: dict, legal_path: Path, out_path: Path,
+def rich_to_records(rich: dict, variant: str, year: int) -> list[dict]:
+    """Render one rich record into two SFT chat records (yes/no + likert).
+
+    The whole point of generate-once-format-twice: a single OpenAI call yields
+    {question, reasoning, yesno, likert}; this renders it deterministically into
+    whichever variant we want, so direct and CoT differ ONLY in the reasoning.
+
+      variant="direct": question -> answer            (reasoning dropped)
+      variant="cot":    question -> reasoning -> answer
+
+    Both reuse the shared policy_battery builders, so each record is byte-identical
+    to the eval prompt it will be scored against, up to the answer position.
+    """
+    q, yn, lk = rich["question"], rich["yesno"], rich["likert"]
+    meta = {"generator": "sft_corpus", "year": year, "variant": variant,
+            "yesno": yn, "likert": lk}
+    if variant == "cot":
+        r = rich["reasoning"]
+        yn_user, yn_asst = build_yesno_cot_user(q), cot_assistant(r, yn)
+        lk_user, lk_asst = build_likert_cot_user(q), cot_assistant(r, lk)
+    else:
+        yn_user, yn_asst = _build_yesno_prompt(q), yn  # content is .strip()'d at render
+        lk_user, lk_asst = _build_likert_prompt(q), lk
+    return [
+        {"messages": [{"role": "user", "content": yn_user},
+                      {"role": "assistant", "content": yn_asst}],
+         "metadata": {**meta, "probe": "yes_no", "target_label": yn}},
+        {"messages": [{"role": "user", "content": lk_user},
+                      {"role": "assistant", "content": lk_asst}],
+         "metadata": {**meta, "probe": "likert", "target_label": lk}},
+    ]
+
+
+def _write_records(rich_records: list[dict], variant: str, year: int, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    n = 0
+    with open(path, "w", encoding="utf-8") as f:
+        for rich in rich_records:
+            for rec in rich_to_records(rich, variant, year):
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                n += 1
+    print(f"  wrote {n} {variant} records -> {path}")
+
+
+def generate_year(client, year: int, cfg: dict, legal_path: Path, *,
+                  cot: bool, out_dir: Path, out_override: Path | None,
                   force: bool) -> None:
-    if out_path.exists() and not force:
-        with open(out_path, encoding="utf-8") as f:
-            n = sum(1 for _ in f)
-        print(f"  {out_path} exists ({n} records); --force to regenerate. Skip.")
+    # CoT mode emits the rich record + both renderings; legacy mode emits the
+    # single direct file (back-compat with the existing pod runs / build script).
+    if cot:
+        rich_path = out_dir / "sft_corpus.rich.jsonl"
+        targets = {"rich": rich_path,
+                   "direct": out_dir / "sft_direct.jsonl",
+                   "cot": out_dir / "sft_cot.jsonl"}
+        sentinel = rich_path
+    else:
+        sentinel = out_override or (out_dir / "sft_corpus.jsonl")
+        targets = {"direct": sentinel}
+    if sentinel.exists() and not force:
+        print(f"  {sentinel} exists; --force to regenerate. Skip.")
         return
 
     n_seeds = int(cfg["n_seeds"])
@@ -232,9 +291,9 @@ def generate_year(client, year: int, cfg: dict, legal_path: Path, out_path: Path
     user_template = (HERE / "prompts" / "user.md").read_text(encoding="utf-8")
     banned = load_banned_phrases(Path(cfg.get("battery_csv", "us_policy_event_battery_v4.csv")))
     print(f"  year {year}: {len(passages)} seed passages, model={model}, "
-          f"{len(banned)} catalog phrases screened")
+          f"{len(banned)} catalog phrases screened, cot={cot}")
 
-    records: list[dict] = []
+    rich_records: list[dict] = []
     label_hist: dict[str, int] = {}
     n_ok = n_leak = n_fail = done = 0
     t0 = time.time()
@@ -253,30 +312,25 @@ def generate_year(client, year: int, cfg: dict, legal_path: Path, out_path: Path
                 n_fail += 1
             else:
                 n_ok += 1
-                meta = {"generator": "sft_corpus", "year": year,
-                        "yesno": res["yesno"], "likert": res["likert"]}
-                records.append({
-                    "messages": [
-                        {"role": "user", "content": _build_yesno_user_prompt(res["question"])},
-                        {"role": "assistant", "content": f" {res['yesno']}"}],
-                    "metadata": {**meta, "probe": "yes_no", "target_label": res["yesno"]}})
-                records.append({
-                    "messages": [
-                        {"role": "user", "content": _build_likert_user_prompt(res["question"])},
-                        {"role": "assistant", "content": f" {res['likert']}"}],
-                    "metadata": {**meta, "probe": "likert", "target_label": res["likert"]}})
+                rich_records.append(res)
                 label_hist[res["yesno"]] = label_hist.get(res["yesno"], 0) + 1
                 label_hist[res["likert"]] = label_hist.get(res["likert"], 0) + 1
             if done % 100 == 0 or done == len(passages):
-                print(f"    {done}/{len(passages)} seeds, {len(records)} records, "
+                print(f"    {done}/{len(passages)} seeds, {n_ok} ok, "
                       f"{time.time()-t0:.0f}s")
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
-        for r in records:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    print(f"  wrote {len(records)} records -> {out_path} "
-          f"(ok={n_ok}, leak-dropped={n_leak}, fail={n_fail})")
+    # Persist the rich record (CoT mode) so the two renderings are auditable +
+    # re-formattable without paying OpenAI again, then write each rendering.
+    if "rich" in targets:
+        targets["rich"].parent.mkdir(parents=True, exist_ok=True)
+        with open(targets["rich"], "w", encoding="utf-8") as f:
+            for rich in rich_records:
+                f.write(json.dumps(rich, ensure_ascii=False) + "\n")
+        print(f"  wrote {len(rich_records)} rich records -> {targets['rich']}")
+    for variant in ("direct", "cot"):
+        if variant in targets:
+            _write_records(rich_records, variant, year, targets[variant])
+    print(f"  ok={n_ok}, leak-dropped={n_leak}, fail={n_fail}")
     print("  label distribution (NOT forced — emerges from corpus):")
     for label in YESNO_LABELS + LIKERT_LABELS:
         print(f"    {label:>16s}: {label_hist.get(label, 0)}")
@@ -288,6 +342,8 @@ def main() -> None:
     years = [args.year] if args.year is not None else parse_years(args.years)
     if args.out is not None and len(years) != 1:
         sys.exit("--out is only valid with a single --year")
+    if args.out is not None and args.cot:
+        sys.exit("--out is not valid with --cot (it writes three named files into <Y>/)")
 
     if "OPENAI_API_KEY" not in os.environ:
         sys.exit("Set OPENAI_API_KEY env var first")
@@ -300,9 +356,10 @@ def main() -> None:
         if not legal_path.exists():
             print(f"  year {year}: legal corpus missing at {legal_path}; skip.")
             continue
-        out_path = args.out or (years_root / str(year) / "sft_corpus.jsonl")
         print(f"=== {year} ===")
-        generate_year(client, year, cfg, legal_path, out_path, args.force)
+        generate_year(client, year, cfg, legal_path, cot=args.cot,
+                      out_dir=years_root / str(year), out_override=args.out,
+                      force=args.force)
 
 
 if __name__ == "__main__":

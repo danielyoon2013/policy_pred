@@ -139,6 +139,49 @@ def _build_likert_prompt(question: str) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# Shared chat / chain-of-thought (CoT) prompt builders
+#
+# These are the SINGLE SOURCE OF TRUTH used by BOTH the SFT generator
+# (synth/sft_corpus) and the CoT eval, so a CoT-SFT record and the CoT eval
+# prompt are byte-identical up to the answer position. They reproduce
+# train.py:render_chat_record's rendering for one user->assistant turn:
+#   "User: {user}\n\nAssistant: {assistant}"  (content .strip()'d)
+# the prompt side being everything up to and including "\n\nAssistant:".
+# ---------------------------------------------------------------------------
+
+ANSWER_MARKER = "Answer:"
+COT_CUE_YESNO = "Think step by step about the reasons, then answer Yes or No."
+COT_CUE_LIKERT = "Think step by step about the reasons, then give your rating."
+
+
+def chat_prompt(user_content: str) -> str:
+    """Prompt side of a single user->assistant chat turn (matches render_chat_record).
+
+    Used when evaluating an SFT-trained model so the eval context reproduces the
+    exact string the model was trained to continue. `chat_format=False` callers
+    use the bare builders instead (for the untrained-on-chat LoRA-only baseline).
+    """
+    return f"User: {user_content.strip()}\n\nAssistant:"
+
+
+def build_yesno_cot_user(question: str) -> str:
+    """User-turn content for the Yes/No CoT probe (reason, then answer)."""
+    return f"{question}\n\n{COT_CUE_YESNO}"
+
+
+def build_likert_cot_user(question: str) -> str:
+    """User-turn content for the Likert CoT probe (reason, then rate)."""
+    return (f"Respond to the following question by rating your agreement.\n"
+            f"\n{question}\n\n{COT_CUE_LIKERT}")
+
+
+def cot_assistant(reasoning: str, label: str) -> str:
+    """Assistant turn for a CoT-SFT record: reasoning, then the verdict after
+    the answer marker. Mirrors what the CoT eval generates + scores."""
+    return f"{reasoning.strip()}\n\n{ANSWER_MARKER} {label.strip()}"
+
+
 def _score_yesno(backend, question: str) -> dict:
     """Score the yes/no probe and return P(yes) + raw logprobs."""
     prompt = _build_yesno_prompt(question)
