@@ -111,8 +111,25 @@ run_cell() {
         data="${SCRATCH}/${name}.jsonl"
         python -m windowing assemble --year "$y" --spec "$SPEC" --per-year "$x" \
             --pool-dir "$POOL_DIR" --out "$data" > "$log" 2>&1
+        # LADDER mode: this cell is the max level (x); one flat-LR run dumps the
+        # adapter at each LADDER level's fraction (lvl/x) into that level's dir,
+        # so a single run produces every level. Also emit each level's eval YAML.
+        local extra=""
+        if [[ -n "${LADDER:-}" ]]; then
+            local parts=() lvl frac lname
+            for lvl in $LADDER; do
+                frac=$(python -c "print(round($lvl/$x, 6))")
+                lname=$(python -m windowing name --year "$y" --backend "$BACKEND" \
+                         --spec "$SPEC" --per-year "$lvl")
+                python -m windowing yaml --year "$y" --backend "$BACKEND" --spec "$SPEC" \
+                    --per-year "$lvl" --out-dir "$YAML_DIR" >/dev/null
+                parts+=("${frac}:${EXPS_DIR}/${lname}/checkpoint")
+            done
+            local joined; printf -v joined '%s,' "${parts[@]}"; joined="${joined%,}"
+            extra="--flat-lr --ladder ${joined}"
+        fi
         CUDA_VISIBLE_DEVICES="$gpu" python train.py --experiment "$yaml" \
-            --data "$data" --batch-size "$BATCH_SIZE" >> "$log" 2>&1
+            --data "$data" --batch-size "$BATCH_SIZE" $extra >> "$log" 2>&1
         local rc=$?
         rm -f "$data"   # scratch; manifest beside the yaml is the record
     else

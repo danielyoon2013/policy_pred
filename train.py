@@ -96,6 +96,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--experiment", type=Path, default=None,
                    help="Resolve --data and --out from an experiment YAML "
                         "(reads experiments/<name>/synth.jsonl or corpus.parquet).")
+    p.add_argument("--flat-lr", action="store_true",
+                   help="Constant LR after warmup (no cosine decay). Use with "
+                        "--ladder so intermediate checkpoints are comparable.")
+    p.add_argument("--ladder", type=str, default=None,
+                   help="Data-scaling ladder: save the adapter at fractions of the "
+                        "run to separate dirs, 'frac:dir,frac:dir,...' (e.g. "
+                        "'0.25:.../_n5000/checkpoint,0.5:.../_n10000/checkpoint,"
+                        "1.0:.../_n20000/checkpoint'). One run yields all levels; "
+                        "replaces the default end-save. Pair with --flat-lr.")
     return p.parse_args()
 
 
@@ -223,10 +232,15 @@ def pack_tokens_and_labels(
 # their own way. train.py just calls backend.forward_for_training(...).
 
 
-def lr_at_step(step: int, total: int, warmup: int, peak: float) -> float:
-    """Linear warmup, then cosine decay to 10% of peak."""
+def lr_at_step(step: int, total: int, warmup: int, peak: float, decay: bool = True) -> float:
+    """Linear warmup, then cosine decay to 10% of peak (decay=True) or constant
+    peak (decay=False). Flat LR is used with --ladder so that checkpoints taken
+    partway through one run are 'same process, more data' and thus directly
+    comparable, rather than being under-annealed snapshots of a longer schedule."""
     if step < warmup:
         return peak * (step + 1) / warmup
+    if not decay:
+        return peak
     progress = (step - warmup) / max(1, total - warmup)
     return peak * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * progress)))
 
@@ -283,6 +297,18 @@ def main() -> None:
     else:
         out_dir = Path("checkpoints") / data_path.stem
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Data-scaling ladder: 'frac:dir,...' -> save the adapter at each fraction of
+    # the run (sorted), instead of only the end-save. One 20k run thus yields the
+    # 5k/10k/20k adapters. Pair with --flat-lr so the early checkpoints aren't
+    # under-annealed snapshots of a longer cosine schedule.
+    ladder = None
+    if args.ladder:
+        ladder = []
+        for part in args.ladder.split(","):
+            frac_s, d = part.split(":", 1)
+            ladder.append((float(frac_s), Path(d)))
+        ladder.sort(key=lambda fd: fd[0])
 
     # 0. Initialize Accelerator (transparent for 1 GPU, handles DDP for N GPUs).
     from accelerate import Accelerator
@@ -432,6 +458,20 @@ def main() -> None:
     step = 0
     t0 = time.time()
     done = False
+
+    # Ladder milestone steps (1.0 -> total_steps, so the final save always fires).
+    ladder_steps = ([(max(1, round(f * total_steps)), d) for f, d in ladder]
+                    if ladder else [])
+    li = 0
+
+    def _save_adapter(dest: Path) -> None:
+        accelerator.wait_for_everyone()
+        if is_main:
+            dest.mkdir(parents=True, exist_ok=True)
+            accelerator.unwrap_model(peft_model).save_pretrained(dest)
+            mp(f"  [ladder] step {step + 1}/{total_steps} -> saved adapter to {dest}")
+        accelerator.wait_for_everyone()
+
     for epoch in range(args.epochs):
         if done:
             break
@@ -459,7 +499,8 @@ def main() -> None:
             accelerator.backward(loss)
 
             for g in optimizer.param_groups:
-                g["lr"] = lr_at_step(step, total_steps, WARMUP_STEPS, args.lr)
+                g["lr"] = lr_at_step(step, total_steps, WARMUP_STEPS, args.lr,
+                                     decay=not args.flat_lr)
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
 
@@ -472,11 +513,23 @@ def main() -> None:
                    f"lr {optimizer.param_groups[0]['lr']:.2e}  "
                    f"tok/s {tok_per_sec:7.0f}  "
                    f"elapsed {el/60:.1f}m")
+
+            # Ladder: save the adapter once we've completed a milestone's steps.
+            completed = step + 1
+            while li < len(ladder_steps) and completed >= ladder_steps[li][0]:
+                _save_adapter(ladder_steps[li][1])
+                li += 1
             step += 1
 
-    # 8. Save (only main process; other ranks wait for it to finish).
+    # 8. Save. With --ladder the milestone saves already wrote each level; flush
+    # any not yet hit (e.g. if --max-steps truncated the run). Otherwise do the
+    # single end-save to out_dir.
     accelerator.wait_for_everyone()
-    if is_main:
+    if ladder:
+        while li < len(ladder_steps):
+            _save_adapter(ladder_steps[li][1])
+            li += 1
+    elif is_main:
         unwrapped = accelerator.unwrap_model(peft_model)
         if args.full_ft:
             mp(f"\nSaving full state_dict to {out_dir}/model_state.pt ...")
