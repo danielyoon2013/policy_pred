@@ -23,6 +23,24 @@ P(yes) climbs from ~−0.25 (10 yrs before enactment) through ~0 at enactment to
 after), at all three data levels (5k/10k/20k). So belief does rise approaching — and through —
 enactment.
 
+**n-shape numbers** (mean over in-window policies; `z` = per-policy z-normalized):
+
+| rel yr | P(yes) 5k / 10k / 20k | z-norm 5k / 10k / 20k |
+|---|---|---|
+| −10 | 0.40 / 0.37 / 0.45 | −0.28 / −0.24 / −0.25 |
+| −5  | 0.42 / 0.38 / 0.46 | −0.13 / −0.11 / −0.13 |
+| **0** | 0.41 / 0.39 / 0.47 | −0.10 / +0.11 / +0.02 |
+| +5  | 0.44 / 0.39 / 0.48 | +0.14 / +0.14 / +0.14 |
+| +10 | 0.47 / 0.40 / 0.48 | +0.51 / +0.30 / +0.14 |
+
+Overall mean P(yes): 5k **0.42**, 10k **0.39**, 20k **0.47**. Likert −0.18 / −0.20 / −0.21 (dead).
+
+## Archived weights (so we never retrain)
+All 270 trained LoRA adapters + their eval.json are saved on the SSD at
+`D:/hist_LLM/policy_pred/round2_nanochat_1931_2020/` (~22 GB), mirroring the pod's
+`experiments/policy_<Y>_nanochat_roll10_n{5000,10000,20000}/` layout — point a future eval run
+there (no retraining needed). nanochat base is at `D:/hist_LLM/periods/1900_1949/model/`.
+
 ## Breakdown by policy domain (all 211 policies, 10 categories)
 
 The 140 fragmented `domain` labels are collapsed to a curated 10-category taxonomy (first-token →
