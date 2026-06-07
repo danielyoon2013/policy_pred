@@ -102,17 +102,26 @@ for cat in TAXONOMY:
     cat_data[cat] = dict(npol=npol, z=z, inc=inc)
 ordered = sorted(TAXONOMY, key=lambda c: cat_data[c]["inc"], reverse=True)
 
-# =================== FIG 2: domain small-multiples (z-normalized) ===================
+# =================== FIG 2: domain small-multiples (z-normalized, all 3 data levels) ===================
+byXcat = {x: {cat: [r for r in byX[x] if r["cat"] == cat] for cat in TAXONOMY} for x in XS}
+def preinc(z):
+    pre = [st.mean(z[k]) for k in range(-10, 1) if z.get(k)]
+    return (pre[-1] - pre[0]) if len(pre) >= 2 else float("nan")
 fig, axes = plt.subplots(2, 5, figsize=(19, 7.5), sharex=True, sharey=True)
 for ax, cat in zip(axes.flat, ordered):
-    d = cat_data[cat]
-    ax.plot(RELS, curve(d["z"]), "-o", ms=3, color="#d62728")
+    incs_lvl = []
+    for x in XS:
+        z = per_policy_z(byXcat[x][cat])
+        ax.plot(RELS, curve(z), "-o", ms=2.5, color=colors[x], label=f"{x//1000}k")
+        incs_lvl.append(preinc(z))
     ax.axvline(0, color="k", lw=.8, ls="--", alpha=.6); ax.axhline(0, color="gray", lw=.6, alpha=.5)
-    ax.set_title(f"{cat}\n(n={d['npol']} policies, pre-rise {d['inc']:+.2f}z)", fontsize=9)
+    ax.set_title(f"{cat}  (n={cat_data[cat]['npol']})\npre-rise 5k/10k/20k: "
+                 f"{incs_lvl[0]:+.2f}/{incs_lvl[1]:+.2f}/{incs_lvl[2]:+.2f}", fontsize=8.5)
     ax.grid(alpha=.2)
+axes[0, 0].legend(fontsize=7, title="data/yr", ncol=3)
 fig.supxlabel("year_model - enactment_year"); fig.supylabel("mean per-policy z-score of P(yes)")
-fig.suptitle("nanochat LoRA-only @ X=10k: per-policy z-normalized P(yes) trajectory by policy domain "
-             "(all 211 policies in 10 categories; sorted by pre-enactment rise)", fontsize=12)
+fig.suptitle("nanochat LoRA-only: per-policy z-normalized P(yes) trajectory by policy domain, all 3 data levels "
+             "(all 211 policies in 10 categories; sorted by X=10k pre-enactment rise)", fontsize=12)
 fig.tight_layout(rect=[0.01, 0.02, 1, 0.95])
 fig.savefig(HERE / "figures" / "domain_znorm_smallmult.png", dpi=130); plt.close(fig)
 print("wrote domain_znorm_smallmult.png")
