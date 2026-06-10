@@ -29,6 +29,10 @@ from importlib import import_module
 REGISTRY = {
     "bulk_corpus": "bulk_corpus",
     "nyt": "nyt",
+    # SWM discourse corpora (LoRA-synth ablation).
+    "gst": "gst",                # Congressional speeches (hein bound/daily)
+    "economist": "economist",    # The Economist weekly archive
+    "fomc": "fomc",              # scraped FOMC minutes/transcripts/statements
     # Future drop-ins (one file each):
     # "ft": "ft",                # D:/.../news_archives/FT/{year}.parquet
     # "newswire": "newswire",    # D:/.../newswire/{year}_data_clean.json

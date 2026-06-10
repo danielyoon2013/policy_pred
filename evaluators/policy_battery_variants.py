@@ -244,17 +244,29 @@ def run(backend, cfg: dict) -> dict:
     #   window_years (symmetric): |model_year - E| <= window_years -> lookback in
     #     [-w, +w], so every policy is scored both before AND after enactment
     #     (the n-shape). Round-2 default.
+    #   rel_min/rel_max (asymmetric, in rel = model_year - E terms): keep policies
+    #     with rel_min <= model_year - E <= rel_max. E.g. rel in [-10, +20] (10 yr
+    #     before enactment .. 20 yr after) => E in [model_year-20, model_year+10].
+    #     Takes precedence over window_years when given.
     #   lookback_years (legacy, asymmetric): model_year <= E <= model_year+lb,
     #     i.e. lookback in [-lb, 0] only. Round-1 YAMLs use this; kept for compat.
     window_years = cfg.get("window_years")
     lookback_years = cfg.get("lookback_years")
-    if window_years is not None or lookback_years is not None:
+    rel_min = cfg.get("rel_min")
+    rel_max = cfg.get("rel_max")
+    if (window_years is not None or lookback_years is not None
+            or rel_min is not None or rel_max is not None):
         import re as _re
         exp_name = cfg.get("_experiment_name", "")
         m = _re.search(r"_(\d{4})_", exp_name) or _re.search(r"(\d{4})", exp_name)
         if m:
             model_year = int(m.group(1))
-            if window_years is not None:
+            if rel_min is not None or rel_max is not None:
+                rmin = int(rel_min) if rel_min is not None else -10
+                rmax = int(rel_max) if rel_max is not None else 10
+                lo = model_year - rmax  # most-past enactment (largest +rel)
+                hi = model_year - rmin  # most-future enactment (largest -rel)
+            elif window_years is not None:
                 lo = model_year - int(window_years)
                 hi = model_year + int(window_years)
             else:

@@ -69,7 +69,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-tokens", type=int, default=4096)
     p.add_argument("--corpus-root", type=Path,
                    default=Path("C:/tmp/policy_pred/years"),
-                   help="Where per-year legal.parquet lives.")
+                   help="Where per-year seed parquets live.")
+    p.add_argument("--seed-parquet-name", default="legal.parquet",
+                   help="Per-year seed parquet filename under corpus-root/<Y>/ "
+                        "(default legal.parquet; e.g. seed_swmgst.parquet for the GST block).")
+    p.add_argument("--out-subdir", default="naive",
+                   help="Per-year output subdir for synth.jsonl "
+                        "(default naive; e.g. naive_swmgst for the GST block).")
     p.add_argument("--batch-work-dir", type=Path,
                    default=Path("C:/tmp/policy_pred/batch_work"),
                    help="Where batch input/output JSONLs + state file live.")
@@ -159,13 +165,13 @@ def phase_submit(client, args, state: dict, state_path: Path) -> None:
             continue
 
         # Already have final synth.jsonl? Skip (sync run produced it).
-        out_file = args.corpus_root / str(year) / "naive" / "synth.jsonl"
+        out_file = args.corpus_root / str(year) / args.out_subdir / "synth.jsonl"
         if out_file.exists():
             n = sum(1 for _ in open(out_file, encoding="utf-8"))
             print(f"  {year}: SKIP (existing synth.jsonl has {n} records)")
             continue
 
-        parquet = args.corpus_root / str(year) / "legal.parquet"
+        parquet = args.corpus_root / str(year) / args.seed_parquet_name
         if not parquet.exists():
             print(f"  {year}: SKIP (no corpus parquet at {parquet})")
             continue
@@ -304,7 +310,7 @@ def phase_parse(client, args, state: dict, state_path: Path) -> None:
         resp = client.files.content(output_file_id)
         output_text = resp.text
 
-        out_dir = args.corpus_root / year_key / "naive"
+        out_dir = args.corpus_root / year_key / args.out_subdir
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "synth.jsonl"
 

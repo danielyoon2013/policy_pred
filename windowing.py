@@ -295,7 +295,9 @@ def write_window_yaml(year: int, backend: str, spec: WeightSpec, per_year: int,
                       modes: list[str] | None = None,
                       variants_per_policy: int | None = None,
                       chat_format: bool | None = None,
-                      cot_max_new_tokens: int = 256) -> Path:
+                      cot_max_new_tokens: int = 256,
+                      rel_min: int | None = None,
+                      rel_max: int | None = None) -> Path:
     """Emit the tiny experiment YAML train.py / eval.py route on (data left blank
     so the CLI --data, i.e. the assembled jsonl, wins).
 
@@ -328,7 +330,18 @@ def write_window_yaml(year: int, backend: str, spec: WeightSpec, per_year: int,
         "  evaluator: policy_battery_variants",
         "  source: csv",
         f"  csv_path: {_CSV_BATTERY}",
-        f"  window_years: {_EVAL_WINDOW_YEARS}",
+    ]
+    # Asymmetric rel-window (rel = model_year - E) takes precedence over the
+    # symmetric window_years when given — e.g. rel_min=-10, rel_max=+20 for the
+    # extended post-enactment trajectory.
+    if rel_min is not None or rel_max is not None:
+        if rel_min is not None:
+            eval_lines.append(f"  rel_min: {int(rel_min)}")
+        if rel_max is not None:
+            eval_lines.append(f"  rel_max: {int(rel_max)}")
+    else:
+        eval_lines.append(f"  window_years: {_EVAL_WINDOW_YEARS}")
+    eval_lines += [
         f"  modes: [{', '.join(modes)}]",
         f"  chat_format: {str(chat_format).lower()}",
     ]
@@ -392,6 +405,11 @@ def _cli() -> None:
     s.add_argument("--chat-format", action=argparse.BooleanOptionalAction, default=None,
                    help="force chat-format eval on/off (default: on iff --sft).")
     s.add_argument("--cot-max-new-tokens", type=int, default=256)
+    s.add_argument("--rel-min", type=int, default=None,
+                   help="asymmetric window lower bound on rel=model_year-E (e.g. -10).")
+    s.add_argument("--rel-max", type=int, default=None,
+                   help="asymmetric window upper bound on rel=model_year-E (e.g. +20). "
+                        "If either rel bound is set it overrides window_years.")
 
     s = sub.add_parser("build-pool")
     s.add_argument("--year", type=int, required=True)
@@ -428,7 +446,8 @@ def _cli() -> None:
                                 modes=modes,
                                 variants_per_policy=args.variants_per_policy,
                                 chat_format=args.chat_format,
-                                cot_max_new_tokens=args.cot_max_new_tokens))
+                                cot_max_new_tokens=args.cot_max_new_tokens,
+                                rel_min=args.rel_min, rel_max=args.rel_max))
 
 
 if __name__ == "__main__":
