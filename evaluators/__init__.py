@@ -28,6 +28,7 @@ REGISTRY = {
     "policy_probe": "policy_probe",      # V1 yes/no probe (catalog.yaml only)
     "policy_battery": "policy_battery",  # yes_no + likert5, catalog OR csv (211 events), no year in prompt
     "policy_battery_variants": "policy_battery_variants",  # variant-aware: mean+std over N paraphrases
+    "values_battery": "values_battery",  # values track: survey items as respondent probes, P(focal answer)
     # Future drop-ins:
     # "humaneval": "humaneval",         # cheap general-cap sanity
 }
