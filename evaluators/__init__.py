@@ -33,7 +33,7 @@ REGISTRY = {
     "gsm_mc": "benchmark.gsm",                             # multi-choice math (fast)
     "gsm8k": "benchmark.gsm8k",                            # open-ended math (generate + parse)
     "race_mc": "benchmark.race",                           # reading comprehension (RACE middle+high)
-    # "nanochat_task": "benchmark.nanochat_task",          # (subtask 3) LAB + HellaSwag/Winogrande/PIQA/MMLU
+    "nanochat_task": "benchmark.nanochat_task",            # bridge: LAB + HellaSwag/Winogrande/PIQA/ARC/MMLU[-History]
 }
 
 

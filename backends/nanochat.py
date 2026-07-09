@@ -58,8 +58,18 @@ def _pick_device() -> torch.device:
 class NanochatBackend:
     LORA_TARGET_MODULES = LORA_TARGET_MODULES
 
-    def __init__(self, weights_dir):
+    def __init__(self, weights_dir, checkpoint_subdir="base_checkpoints",
+                 model_tag=None, step=None, tokenizer_dir=None):
         self.weights_dir = Path(weights_dir)
+        # Which checkpoint to load. Defaults reproduce the old behavior (latest
+        # under base_checkpoints); set checkpoint_subdir/model_tag/step to pin a
+        # specific vintage, e.g. continual year_checkpoints/d23/model_<step>.pt.
+        self.checkpoint_subdir = checkpoint_subdir
+        self.model_tag = model_tag
+        self.step = step
+        # Dir containing tokenizer/ (nanochat reads NANOCHAT_BASE_DIR/tokenizer);
+        # may differ from weights_dir for the continual checkpoints.
+        self.tokenizer_dir = Path(tokenizer_dir) if tokenizer_dir is not None else self.weights_dir
         self._model = None
         self._tokenizer = None
         self._device = None
@@ -67,27 +77,33 @@ class NanochatBackend:
     def _ensure_loaded(self) -> None:
         if self._model is not None:
             return
-
-        # nanochat's loader resolves the tokenizer + checkpoint dir via its
-        # own get_base_dir(), which honors $NANOCHAT_BASE_DIR. Point it at
-        # our weights_dir so it finds <weights_dir>/tokenizer/ and
-        # <weights_dir>/base_checkpoints/.
-        os.environ.setdefault("NANOCHAT_BASE_DIR", str(self.weights_dir))
-
         self._device = _pick_device()
 
-        # Build the model + tokenizer via nanochat's standard loader.
-        # phase="eval" puts the model in eval mode; we'll flip to train()
-        # when peft attaches a trainable adapter on top.
-        from nanochat.checkpoint_manager import load_model
-        model, tokenizer, _meta = load_model("base", self._device, phase="eval")
-        # Nanochat hardcodes its rotary cos/sin buffers as bf16 (gpt.py
-        # asserts this in forward), but on CUDA the loaded state_dict
-        # weights may stay as fp32 — causing a dtype mismatch in c_q/c_k
-        # at the first linear op. Cast the whole model to bf16 so
-        # weights + activations + cos/sin all agree. (On CPU, load_model
-        # has already converted to float32 for stability, and we don't
-        # want to break that path — only cast on CUDA.)
+        # nanochat's loader resolves the tokenizer via get_base_dir(), which honors
+        # $NANOCHAT_BASE_DIR (it reads NANOCHAT_BASE_DIR/tokenizer/).
+        is_default = (self.model_tag is None and self.step is None
+                      and self.checkpoint_subdir == "base_checkpoints")
+        if is_default:
+            # Legacy path: latest checkpoint under <weights_dir>/base_checkpoints.
+            os.environ.setdefault("NANOCHAT_BASE_DIR", str(self.weights_dir))
+            from nanochat.checkpoint_manager import load_model
+            model, tokenizer, _meta = load_model("base", self._device, phase="eval")
+        else:
+            # Pinned checkpoint (e.g. a continual year vintage): load an explicit
+            # <weights_dir>/<checkpoint_subdir>/<model_tag>/model_<step>.pt. The
+            # tokenizer can live beside the checkpoints, so point NANOCHAT_BASE_DIR
+            # at tokenizer_dir rather than weights_dir.
+            os.environ["NANOCHAT_BASE_DIR"] = str(self.tokenizer_dir)
+            from nanochat.checkpoint_manager import load_model_from_dir
+            checkpoints_dir = str(self.weights_dir / self.checkpoint_subdir)
+            model, tokenizer, _meta = load_model_from_dir(
+                checkpoints_dir, self._device, phase="eval",
+                model_tag=self.model_tag, step=self.step,
+            )
+        # Nanochat asserts bf16 rotary cos/sin in forward; on CUDA the loaded
+        # weights may be fp32, causing a dtype mismatch in c_q/c_k. Cast to bf16 so
+        # weights + activations + cos/sin all agree. (On CPU load_model already
+        # uses float32 for stability, so only cast on CUDA.)
         if self._device.type == "cuda":
             model = model.to(torch.bfloat16)
         self._model = model
