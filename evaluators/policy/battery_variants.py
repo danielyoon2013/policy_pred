@@ -31,7 +31,7 @@ from typing import Any
 # Import from sibling module. Works both as `policy_pred.evaluators.policy_battery_variants`
 # (production via eval.py dispatcher) and as a standalone import for local testing.
 try:
-    from .policy_battery import (  # noqa: TID252
+    from .battery import (  # noqa: TID252
         EVALUATOR_VERSION as _PB_VERSION,
         LIKERT_OPTIONS,
         LIKERT_VALUES,
@@ -47,7 +47,7 @@ try:
         build_likert_cot_user,
     )
 except ImportError:
-    from policy_battery import (  # type: ignore[no-redef]
+    from battery import (  # type: ignore[no-redef]
         EVALUATOR_VERSION as _PB_VERSION,
         LIKERT_OPTIONS,
         LIKERT_VALUES,

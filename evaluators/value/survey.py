@@ -25,9 +25,9 @@ import time
 from pathlib import Path
 
 try:
-    from .policy_battery import chat_prompt  # noqa: TID252
+    from ..policy.battery import chat_prompt  # noqa: TID252
 except ImportError:  # standalone import for local testing
-    from policy_battery import chat_prompt  # type: ignore[no-redef]
+    from policy.battery import chat_prompt  # type: ignore[no-redef]
 
 EVALUATOR_VERSION = "values-v1.0"
 

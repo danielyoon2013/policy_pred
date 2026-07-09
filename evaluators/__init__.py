@@ -1,36 +1,39 @@
 """Plug-in registry for evaluation methods.
 
-An "evaluator" runs a model against a benchmark and returns metrics. Each
-evaluator lives in its own module under evaluators/ and exposes a top-level
-`run(model, tokenizer, cfg)` function:
+Each "evaluator" runs a model against a benchmark and returns metrics. Evaluators
+live under evaluators/<family>/ and expose a top-level `run(backend, cfg) -> dict`:
 
-    def run(model, tokenizer, cfg: dict) -> dict:
+    def run(backend, cfg: dict) -> dict:
         '''Return a dict of metrics + per-example details.'''
 
-To add a new evaluator:
-    1. Create <name>.py with a `run()` function.
-    2. Add an entry to REGISTRY below.
-    3. Reference it from an experiment YAML as
-       `eval.evaluator: <name>`.
+Families (one folder per test the professor cares about):
+    policy/     (1) policy prediction  — belief probes over the policy-event battery
+    value/      (2) value assessment   — model-as-survey-respondent, P(focal answer)
+    benchmark/  (3) LAB look-ahead + (4) external capability — MC via score_continuations
 
-Currently only `gsm8k` is implemented. `policy_probe` will be added when
-we move to the policy V2 work (it'll wrap the existing eval.py logic).
+To add an evaluator: create <family>/<name>.py with a `run()`, add an entry to
+REGISTRY below (public name -> dotted module under evaluators/), and reference it
+from an experiment YAML as `eval.evaluator: <public name>`.
 """
 from importlib import import_module
 
 
-# Public name (used in experiment YAMLs) -> module name (file in this dir).
+# Public name (used in experiment YAMLs) -> dotted module path under evaluators/.
+# Public names are STABLE — experiment YAMLs depend on them; only the module
+# location changed when evaluators were grouped into family folders.
 REGISTRY = {
-    "gsm_mc": "gsm_mc",                  # multi-choice math (fast, 4 score_continuations per problem)
-    "gsm8k": "gsm8k",                    # open-ended math (generate + parse final number; slow)
-    "arc_mc": "arc_mc",                  # multi-choice science reasoning (1144 items, ARC-Challenge)
-    "race_mc": "race_mc",                # reading comprehension (RACE-Middle 360 + RACE-High 880)
-    "policy_probe": "policy_probe",      # V1 yes/no probe (catalog.yaml only)
-    "policy_battery": "policy_battery",  # yes_no + likert5, catalog OR csv (211 events), no year in prompt
-    "policy_battery_variants": "policy_battery_variants",  # variant-aware: mean+std over N paraphrases
-    "values_battery": "values_battery",  # values track: survey items as respondent probes, P(focal answer)
-    # Future drop-ins:
-    # "humaneval": "humaneval",         # cheap general-cap sanity
+    # (1) policy prediction
+    "policy_probe": "policy.probe",                        # V1 yes/no probe (catalog.yaml only)
+    "policy_battery": "policy.battery",                    # yes_no + likert5, catalog OR csv (211 events)
+    "policy_battery_variants": "policy.battery_variants",  # variant-aware: mean+std over N paraphrases
+    # (2) value assessment
+    "values_battery": "value.survey",                      # survey items as respondent probes, P(focal answer)
+    # (3) LAB + (4) external benchmarks (multiple-choice via score_continuations)
+    "arc_mc": "benchmark.arc",                             # ARC-Challenge science reasoning
+    "gsm_mc": "benchmark.gsm",                             # multi-choice math (fast)
+    "gsm8k": "benchmark.gsm8k",                            # open-ended math (generate + parse)
+    "race_mc": "benchmark.race",                           # reading comprehension (RACE middle+high)
+    # "nanochat_task": "benchmark.nanochat_task",          # (subtask 3) LAB + HellaSwag/Winogrande/PIQA/MMLU
 }
 
 
