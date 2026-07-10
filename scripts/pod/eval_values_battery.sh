@@ -8,19 +8,24 @@
 # experiment names (values_<Y>_nanochat_<arm>_n10000), so the policy track's
 # eval.jsons are untouchable by construction.
 #
-# The battery is tiny (24 items, scoring-only), so each cell is model-load
-# dominated (~30s); a full 90-year x 2-arm sweep is ~30-45 GPU-minutes on 4 GPUs.
+# The v2 battery is ~2,669 items (scoring-only): each cell is ~2-3 min (model load +
+# ~10k continuation scorings). Parallelize ACROSS PODS by year range (START_YEAR/END_YEAR)
+# and by arm; a full 1943-2020 x 2-arm sweep is ~6-7 GPU-hours (minutes across a few pods).
 #
-# Usage (after uploading us_values_battery_v1.csv + evaluator via git pull):
-#   bash scripts/pod/eval_values_battery.sh caselaw $HOME/policy_pred_data/experiments
-#   bash scripts/pod/eval_values_battery.sh swmgst  $HOME/pp_swmgst/experiments
-# Env: START_YEAR/END_YEAR (default 1931/2020), JOBS_PER_GPU (default 2),
+# Usage (after git pull brings values_track/v2/battery.csv + the evaluator):
+#   BATTERY_CSV=values_track/v2/battery.csv START_YEAR=1972 END_YEAR=2000 \
+#       bash scripts/pod/eval_values_battery.sh caselaw $HOME/policy_pred_data/experiments
+#   # a second pod: START_YEAR=2001 END_YEAR=2020 ... ; a third arm: swmgst
+# Env: BATTERY_CSV (default values_track/v2/battery.csv), VERSION (default v2),
+#      START_YEAR/END_YEAR (default 1943/2020), JOBS_PER_GPU (default 2),
 #      ADAPTER_PATTERN (default policy_%d_nanochat_roll10_n10000).
 set -uo pipefail
 
 ARM="${1:?usage: <arm-label> <adapters-experiments-dir>}"
 ADAPTERS_DIR="${2:?missing adapters experiments dir}"
-START_YEAR="${START_YEAR:-1931}"
+BATTERY_CSV="${BATTERY_CSV:-values_track/v2/battery.csv}"
+VERSION="${VERSION:-v2}"
+START_YEAR="${START_YEAR:-1943}"
 END_YEAR="${END_YEAR:-2020}"
 JOBS_PER_GPU="${JOBS_PER_GPU:-2}"
 ADAPTER_PATTERN="${ADAPTER_PATTERN:-policy_%d_nanochat_roll10_n10000}"
@@ -42,7 +47,7 @@ echo "  out=$OUT_ROOT  GPUs=${GPUS[*]} x${JOBS_PER_GPU}"
 
 run_cell() {
     local gpu="$1" y="$2"
-    local name="values_${y}_nanochat_${ARM}_n10000"
+    local name="values_${VERSION}_${y}_nanochat_${ARM}_n10000"
     # shellcheck disable=SC2059
     local adapter="$ADAPTERS_DIR/$(printf "$ADAPTER_PATTERN" "$y")/checkpoint"
     [[ -f "$OUT_ROOT/experiments/$name/eval.json" ]] && return 2
@@ -54,7 +59,7 @@ model_type: nanochat
 
 eval:
   evaluator: values_battery
-  csv_path: us_values_battery_v1.csv
+  csv_path: $BATTERY_CSV
   chat_format: false
 EOF
     POLICY_PRED_DATA_ROOT="$OUT_ROOT" CUDA_VISIBLE_DEVICES="$gpu" \

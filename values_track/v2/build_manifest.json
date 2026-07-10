@@ -1,0 +1,29 @@
+{
+  "min_years": 2,
+  "year_range": [
+    1943,
+    2020
+  ],
+  "filter": "geography=US AND demographic in TOPLINE; drop matrix, DK/junk, multi-response, <2 options",
+  "raw_questions": 146831,
+  "kept_questions": 2669,
+  "human_answer_rows": 176346,
+  "item_years": 24954,
+  "dropped_by_reason": {
+    "below_min_years": 134510,
+    "matrix_grid": 8726,
+    "multi_response": 222,
+    "degenerate": 16,
+    "foreign_only": 1
+  },
+  "by_source": {
+    "gss": 939,
+    "gallup": 913,
+    "pew": 441,
+    "prri": 376
+  },
+  "question_type": {
+    "categorical": 2006,
+    "binary": 663
+  }
+}
